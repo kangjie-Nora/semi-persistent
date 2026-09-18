@@ -179,3 +179,94 @@ fn rejects_invalid_inputs_and_incomparable_universes() {
             .is_err()
     );
 }
+
+#[path = "support/wrapped_u32_cases.rs"]
+mod wrapped_u32_cases;
+
+#[test]
+fn u32_reference_boundary_answers() {
+    use wrapped_u32_cases::reference_has as has;
+    for x in [u32::MAX, 0, 1] {
+        assert!(has(arc(u32::MAX, 1), x));
+    }
+    for x in [2, 15, u32::MAX - 1] {
+        assert!(!has(arc(u32::MAX, 1), x));
+    }
+    assert!(has(arc(u32::MAX, u32::MAX), u32::MAX));
+    assert!(!has(arc(u32::MAX, u32::MAX), 0));
+    assert!(has(arc(0x7fff_ffff, 0x8000_0000), 0x8000_0000));
+    assert!(!has(arc(0x7fff_ffff, 0x8000_0000), 0));
+}
+
+#[test]
+fn u32_cardinality_distinguishes_small_width_from_u32() {
+    use wrapped_u32_cases::{MODULUS, cardinality};
+    assert_eq!(cardinality(Repr::Empty), 0);
+    assert_eq!(cardinality(Repr::Full), MODULUS);
+    assert_eq!(cardinality(arc(0, u32::MAX)), MODULUS);
+    assert_eq!(cardinality(arc(1, 0)), MODULUS);
+    assert_eq!(cardinality(arc(u32::MAX, u32::MAX)), 1);
+    assert_eq!(cardinality(arc(u32::MAX, 1)), 3);
+    assert_eq!(cardinality(arc(0, 15)), 16); // NOT Full for u32.
+    assert_eq!(cardinality(arc(14, 2)), MODULUS - 11);
+    assert_eq!(
+        Oracle::new(4)
+            .unwrap()
+            .values(arc(14, 2))
+            .unwrap()
+            .cardinality(),
+        5
+    );
+}
+
+#[test]
+fn u32_boundary_checker_self_test_against_endpoint_definition() {
+    // Test-only second definition, NOT a call to production WrappedU32::has.
+    wrapped_u32_cases::check_membership(|repr, x| match repr {
+        Repr::Empty => false,
+        Repr::Full => true,
+        Repr::Arc { lo, hi } if lo <= hi => lo <= x && x <= hi,
+        Repr::Arc { lo, hi } => x >= lo || x <= hi,
+    })
+    .unwrap();
+}
+
+#[test]
+fn u32_boundary_checker_rejects_injected_bugs() {
+    use wrapped_u32_cases::{check_membership, reference_has};
+    // Wrong wrapping boundary: truncation to a four-bit universe.
+    assert!(
+        check_membership(|repr, x| {
+            if let Repr::Arc { lo: 0, hi: 15 } = repr {
+                true
+            } else {
+                reference_has(repr, x)
+            }
+        })
+        .is_err()
+    );
+    // Wrong singleton interpretation.
+    assert!(
+        check_membership(|repr, x| {
+            if let Repr::Arc { lo, hi } = repr {
+                if lo == hi {
+                    return false;
+                }
+            }
+            reference_has(repr, x)
+        })
+        .is_err()
+    );
+    // Dropping the zero-side component of a wrapping arc.
+    assert!(
+        check_membership(|repr, x| {
+            if let Repr::Arc { lo, hi } = repr {
+                if lo > hi {
+                    return x >= lo;
+                }
+            }
+            reference_has(repr, x)
+        })
+        .is_err()
+    );
+}

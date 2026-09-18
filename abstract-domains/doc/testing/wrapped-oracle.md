@@ -70,10 +70,11 @@ Keep the reference independent of the production membership algorithm:
 
 1. Translate a reference Repr to the actual constructor (adapt enum names and
    canonicalization conventions after agreement).
-2. Use `Oracle::sample_membership` with executable production membership to
-   collect the values represented by its result. If membership is spec-only,
-   use a reviewed executable decoder instead; do not claim that a Rust mirror
-   itself establishes correspondence with Verus definitions.
+2. For a matching small-width implementation, use `Oracle::sample_membership`
+   with executable production membership. For fixed u32, use the sparse boundary
+   checker described below instead. A spec-only `has` cannot be called from Rust
+   runtime tests; request an executable membership function with a Verus contract
+   equating its result to `has`. A test-only decoder is not production coverage.
 3. For constructors, membership and normalization, use `check_exact`.
 4. For join, compare the concrete union with the candidate using
    `check_contained_by`; for meet use the concrete intersection. Do not demand
@@ -85,7 +86,9 @@ Keep the reference independent of the production membership algorithm:
    an ordinary lattice. One-way containment alone does not prove a narrowing
    operation or all properties needed by the later e-class analysis.
 
-Start with 4-bit exhaustive operations to control runtime. Keep a documented
+Only run 4-bit exhaustive production-operation comparisons if the actual
+implementation supports those semantics. Restricting u32 inputs to 0..15 does
+not turn u32 arithmetic into 4-bit arithmetic. Keep a documented
 coverage boundary for any larger-width or sampled checks. Generic comparison
 helpers can be reused for conversion tests: ordinary-to-wrapped conversion may
 be exact, while wrapped-to-one-ordinary-interval may require a sound cover.
@@ -98,3 +101,44 @@ or verification-contract changes and no new dependencies. Passing these tests
 means the oracle passed its self-checks. Production adapter tests and universal
 Verus containment proofs remain future work. Consequently, no new verified
 operation is added to `doc/proof-status.md` by this PR.
+
+
+## PR #102: fixed-u32 integration preparation
+
+Reviewed upstream PR #102 at `c695af8ebc7bcebcc299f19f5dfc6ce83c90c9b2`.
+It adds `domains::WrappedU32::{Bottom, Top, Arc}` and spec-only `wf`/`has`.
+It does not yet provide executable membership or normalization. The PR has not
+been imported into this branch. No production adapter is claimed here.
+
+`tests/support/wrapped_u32_cases.rs` adds a sparse 32-bit reference and a
+callback-based boundary checker without allocating 2^32 membership entries.
+Membership is computed using modular distances in u64, independently of the
+endpoint AND/OR definition. Cardinality also uses u64 so Full has size 2^32.
+Four additional self-tests cover boundary answers, cardinality, comparison
+against a test-only endpoint definition, and detection of injected errors.
+There are now 13 oracle/self-check tests, not 13 production integration tests.
+
+Cases cover Bottom/Top equivalents, singletons at zero and u32::MAX, full-circle
+arcs, wrap-around near u32::MAX, the signed-bit boundary, and small ordinary arcs.
+Probes include endpoints, neighboring values, and fixed boundary values. This is
+sampled u32 evidence, NOT exhaustive u32 testing or a Verus proof.
+
+Important distinctions:
+
+- Arc(0,15) is Full in four bits, but contains only 16 values in u32.
+- Arc(14,2) contains five values in four bits, but 2^32 - 11 values in u32.
+- Arc(u32::MAX,1) contains exactly u32::MAX, 0, 1.
+- No production normalization policy is imposed or implemented by these tests.
+
+Once the implementation and executable membership are available, call
+`wrapped_u32_cases::check_membership` with a closure that maps Repr::Empty to
+WrappedU32::Bottom, Repr::Full to WrappedU32::Top, and Arc endpoints unchanged,
+then invokes the real membership function. Keep the oracle independent; do not
+implement the actual answer by calling `reference_has`. The concrete production
+adapter will be added when the real interface is available, rather than leaving
+an ignored or misleading placeholder test.
+
+Coordinate with the implementation owner about executable membership and its
+`result == self.has(x)` contract, normalization ownership/policy, and whether
+this first slice targets u32 only. Wider/smaller supported implementations can
+then get their own correctly sized checks.
