@@ -1531,3 +1531,91 @@ abstract_domain!(d32, u32, 32u32, 0xFFFF_FFFFu32);
 abstract_domain!(d64, u64, 64u32, 0xFFFF_FFFF_FFFF_FFFFu64);
 // d128 disabled: u128 bitvector proofs exceed Z3 capacity
 // abstract_domain!(d128, u128, 128u32, 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFFu128);
+
+use vstd::prelude::*;
+
+verus! {
+
+/// Sign-agnostic wrapped interval parameterized by the integer type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Wrapped<T> {
+    /// Canonical empty set (no concrete values).
+    Bottom,
+    /// Canonical full set (all values for the type).
+    Top,
+    /// Canonical arc from `lo` clockwise to `hi`.
+    Arc { lo: T, hi: T },
+}
+
+macro_rules! impl_wrapped_domain {
+    ($ty:ty) => {
+        impl Wrapped<$ty> {
+            /// Membership predicate (concretization): mathematical spec.
+            pub open spec fn has(self, x: $ty) -> bool {
+                match self {
+                    Wrapped::Bottom => false,
+                    Wrapped::Top => true,
+                    Wrapped::Arc { lo, hi } => {
+                        if lo <= hi {
+                            lo <= x && x <= hi
+                        } else {
+                            x >= lo || x <= hi
+                        }
+                    }
+                }
+            }
+
+            /// Executable membership check that provably matches the mathematical `has` spec.
+            pub fn contains(&self, x: $ty) -> (res: bool)
+                ensures res == self.has(x)
+            {
+                match *self {
+                    Wrapped::Bottom => false,
+                    Wrapped::Top => true,
+                    Wrapped::Arc { lo, hi } => {
+                        if lo <= hi {
+                            lo <= x && x <= hi
+                        } else {
+                            x >= lo || x <= hi
+                        }
+                    }
+                }
+            }
+
+            /// Constructor for a constant / singleton value.
+            pub open spec fn constant(val: $ty) -> Self {
+                Wrapped::Arc { lo: val, hi: val }
+            }
+
+            /// Check if interval represents an empty set.
+            pub open spec fn is_bottom(self) -> bool {
+                match self {
+                    Wrapped::Bottom => true,
+                    _ => false,
+                }
+            }
+
+            /// Check if interval represents the full universe.
+            pub open spec fn is_top(self) -> bool {
+                match self {
+                    Wrapped::Top => true,
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+// Generate implementations for all requested primitive integer types
+impl_wrapped_domain!(u8);
+impl_wrapped_domain!(u16);
+impl_wrapped_domain!(u32);
+impl_wrapped_domain!(u64);
+impl_wrapped_domain!(u128);
+impl_wrapped_domain!(i8);
+impl_wrapped_domain!(i16);
+impl_wrapped_domain!(i32);
+impl_wrapped_domain!(i64);
+impl_wrapped_domain!(i128);
+
+} // verus!
