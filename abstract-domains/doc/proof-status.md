@@ -1,12 +1,12 @@
 # Abstract Domains Proof Status
 
-Last refreshed: 2026-08-21.
+Last refreshed: 2026-09-19.
 
 ## Current result
 
 ```text
 cargo verus verify
-994 verified, 0 errors
+1005 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -25,7 +25,8 @@ Enabled executable widths:
 
 The `d128` macro invocation remains disabled because its bitvector obligations
 exceed the current solver capacity. Do not describe `u128` as an enabled or
-verified executable instance.
+verified executable instance of the existing d* domains. The separate
+Wrapped<u128>/Wrapped<i128> membership implementations described below do verify.
 
 The separate Rust mirror suite contains 32 tests:
 
@@ -69,3 +70,19 @@ subtraction, multiplication, division, shifts, joins, meets, and negation.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
+
+
+## Wrapped membership
+
+`Wrapped<T>::contains` verifies `result == self.has(x)` for u8/u16/u32/u64/u128
+and i8/i16/i32/i64/i128. This is membership/spec correspondence, not an arithmetic
+transfer containment theorem. The macro expansion fix allows ordinary Rust and
+Verus to process the same implementations. Verus reports a warning about derived
+Clone having no explicit specification; no new proof escape was added.
+
+The separate `wrapped_membership` target has 10 passing production tests:
+exhaustive u8/i8 endpoint/value combinations and sampled boundary cases for all
+wider types. `wrapped_oracle` has 13 reference self-tests. Together with the 32
+existing mirror tests, the crate has 55 passing tests and one ignored doctest.
+No executable normalization, join/meet, or wrapped arithmetic is yet covered.
+Raw full-circle Arc values remain constructible; canonicalization is not enforced.

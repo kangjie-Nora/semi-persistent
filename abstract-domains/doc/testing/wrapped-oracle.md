@@ -1,8 +1,9 @@
 # Wrapped Interval oracle (WI-W4-02)
 
 This PR provides an independent finite-set reference and an exhaustive test
-harness. It does **not** implement a production WrappedInterval or prove its
-soundness in Verus. No Vignesvern implementation is connected yet.
+harness. Production `Wrapped<T>::contains` is now connected in a separate
+`wrapped_membership` test target. No production normalization, join/meet, or
+arithmetic is implemented or validated by this harness.
 
 ## Run
 
@@ -10,6 +11,7 @@ From the repository root:
 
 ```sh
 cargo test -p semi-persistent-abstract-domains --test wrapped_oracle
+cargo test -p semi-persistent-abstract-domains --test wrapped_membership
 ```
 
 The harness only uses the Rust standard library. It can also run without building
@@ -45,7 +47,8 @@ For widths 1..=4, test every raw endpoint pair and each concrete value, every
 normalization case, and every pair of canonical representations for the concrete
 set union/intersection oracle. There are 4, 14, 58, and 242 canonical values,
 respectively (2 + N*(N-1)). This covers 62,140 ordered canonical pairs in total.
-It is NOT exhaustive testing of production operations, which are not connected.
+These 1–4 bit tests exercise the reference only. Production membership coverage
+is described below.
 Arithmetic reference checks are selected examples, not an exhaustive arithmetic
 claim. A `binary_image` callback supplies the concrete operation semantics.
 Returning None models absence of a successful value only; division alarms need
@@ -64,81 +67,50 @@ For the 4-bit intersection of Arc(12,6) and Arc(4,14), the exact result is
 arc is a sound but inexact cover in this example. This PR deliberately does not
 choose or implement a join/meet algorithm or tie-break policy.
 
-## Connecting the production implementation later
+## Production membership integration (2026-09-19)
 
-Keep the reference independent of the production membership algorithm:
+PR #2 was merged into this fork's main and integrated into the test branch.
+It supplies `Wrapped<T>` for u8/u16/u32/u64/u128 and i8/i16/i32/i64/i128.
+The macro now expands to a `verus!` block so generated specification syntax is
+processed before Rust parses the implementation. This fixes the compile error
+in the imported representation. The membership algorithm is unchanged.
 
-1. Translate a reference Repr to the actual constructor (adapt enum names and
-   canonicalization conventions after agreement).
-2. For a matching small-width implementation, use `Oracle::sample_membership`
-   with executable production membership. For fixed u32, use the sparse boundary
-   checker described below instead. A spec-only `has` cannot be called from Rust
-   runtime tests; request an executable membership function with a Verus contract
-   equating its result to `has`. A test-only decoder is not production coverage.
-3. For constructors, membership and normalization, use `check_exact`.
-4. For join, compare the concrete union with the candidate using
-   `check_contained_by`; for meet use the concrete intersection. Do not demand
-   exactness when one arc cannot express the exact answer.
-5. For arithmetic, enumerate concrete operands via `binary_image` using the
-   agreed modular, signedness and error semantics, then check containment.
-6. Run identical inputs repeatedly to check the selected deterministic policy.
-   Algebraic laws must be assessed individually: wrapped intervals do not form
-   an ordinary lattice. One-way containment alone does not prove a narrowing
-   operation or all properties needed by the later e-class analysis.
+`wrapped_membership.rs` calls actual production `contains`:
 
-Only run 4-bit exhaustive production-operation comparisons if the actual
-implementation supports those semantics. Restricting u32 inputs to 0..15 does
-not turn u32 arithmetic into 4-bit arithmetic. Keep a documented
-coverage boundary for any larger-width or sampled checks. Generic comparison
-helpers can be reused for conversion tests: ordinary-to-wrapped conversion may
-be exact, while wrapped-to-one-ordinary-interval may require a sound cover.
-Do not assert set equality for an unrepresentable conversion.
+- Exhaustive u8 and i8 membership: every raw endpoint pair plus Bottom and Top,
+  each checked at every 8-bit pattern (33,555,456 checks across both types).
+  Expected sets come from the independent 8-bit ring-walking oracle. Signed
+  operands preserve the same bit patterns via u8-to-i8 casts.
+- The prepared sparse u32 checker is connected to real Wrapped<u32> values.
+- Eight additional tests cover all wider unsigned and signed types, including
+  minima, maxima, zero, the sign boundary, endpoints and adjacent values.
+  Expectations use unsigned wrapping distance, independent of signed ordering.
+  These are sampled wider-width checks, not exhaustive testing of those widths.
 
-## Verification status
+The 13 original oracle self-tests remain separate from these 10 production tests.
+The full crate test run passes 55 tests (32 existing, 13 oracle, 10 production),
+with one ignored doctest. `cargo verus verify` reports 1005 verified, 0 errors.
+The executable membership contract `result == self.has(x)` verifies for all ten
+implementations. A warning remains for the derived Clone lacking an explicit
+specification; this is not a membership verification failure.
 
-This adds ordinary Rust tests and documentation only, with no production source
-or verification-contract changes and no new dependencies. Passing these tests
-means the oracle passed its self-checks. Production adapter tests and universal
-Verus containment proofs remain future work. Consequently, no new verified
-operation is added to `doc/proof-status.md` by this PR.
+## Normalization boundary and remaining work
 
+The agreed convention is singleton for equal endpoints and Top for full-circle
+results. The current public enum still allows noncanonical full-circle arcs;
+there is no executable normalizer or constructor enforcing the convention.
+Membership tests deliberately check raw arcs, including full-circle arcs. They
+do not claim canonicalization is implemented. `constant`, `is_top`, and
+`is_bottom` remain spec-only; `is_top` identifies the Top variant, not every raw
+arc whose represented set is full.
 
-## PR #102: fixed-u32 integration preparation
+Next, connect executable normalization when provided and check exact set
+preservation and canonical output. For production join/meet and arithmetic,
+compare against concrete reference results using containment, requiring exactness
+only when appropriate. Never discard a split-intersection component.
 
-Reviewed upstream PR #102 at `c695af8ebc7bcebcc299f19f5dfc6ce83c90c9b2`.
-It adds `domains::WrappedU32::{Bottom, Top, Arc}` and spec-only `wf`/`has`.
-It does not yet provide executable membership or normalization. The PR has not
-been imported into this branch. No production adapter is claimed here.
-
-`tests/support/wrapped_u32_cases.rs` adds a sparse 32-bit reference and a
-callback-based boundary checker without allocating 2^32 membership entries.
-Membership is computed using modular distances in u64, independently of the
-endpoint AND/OR definition. Cardinality also uses u64 so Full has size 2^32.
-Four additional self-tests cover boundary answers, cardinality, comparison
-against a test-only endpoint definition, and detection of injected errors.
-There are now 13 oracle/self-check tests, not 13 production integration tests.
-
-Cases cover Bottom/Top equivalents, singletons at zero and u32::MAX, full-circle
-arcs, wrap-around near u32::MAX, the signed-bit boundary, and small ordinary arcs.
-Probes include endpoints, neighboring values, and fixed boundary values. This is
-sampled u32 evidence, NOT exhaustive u32 testing or a Verus proof.
-
-Important distinctions:
-
-- Arc(0,15) is Full in four bits, but contains only 16 values in u32.
-- Arc(14,2) contains five values in four bits, but 2^32 - 11 values in u32.
-- Arc(u32::MAX,1) contains exactly u32::MAX, 0, 1.
-- No production normalization policy is imposed or implemented by these tests.
-
-Once the implementation and executable membership are available, call
-`wrapped_u32_cases::check_membership` with a closure that maps Repr::Empty to
-WrappedU32::Bottom, Repr::Full to WrappedU32::Top, and Arc endpoints unchanged,
-then invokes the real membership function. Keep the oracle independent; do not
-implement the actual answer by calling `reference_has`. The concrete production
-adapter will be added when the real interface is available, rather than leaving
-an ignored or misleading placeholder test.
-
-Coordinate with the implementation owner about executable membership and its
-`result == self.has(x)` contract, normalization ownership/policy, and whether
-this first slice targets u32 only. Wider/smaller supported implementations can
-then get their own correctly sized checks.
+Only use exhaustive small-width operation tests for implementations with matching
+width semantics: restricting u32 operands to 0..15 does not make them 4-bit
+values. Conversions that need a sound cover must not be tested as exact equality.
+Required algebraic laws and deterministic tie-breaks must be agreed individually;
+wrapped intervals do not form an ordinary lattice.

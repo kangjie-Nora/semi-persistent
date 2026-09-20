@@ -1543,66 +1543,71 @@ pub enum Wrapped<T> {
     Bottom,
     /// Canonical full set (all values for the type).
     Top,
-    /// Canonical arc from `lo` clockwise to `hi`.
+    /// Arc from `lo` clockwise to `hi`; raw construction can represent a full circle.
+    /// Canonical normalization is not implemented yet.
     Arc { lo: T, hi: T },
 }
 
+} // verus!
+
 macro_rules! impl_wrapped_domain {
     ($ty:ty) => {
-        impl Wrapped<$ty> {
-            /// Membership predicate (concretization): mathematical spec.
-            pub open spec fn has(self, x: $ty) -> bool {
-                match self {
-                    Wrapped::Bottom => false,
-                    Wrapped::Top => true,
-                    Wrapped::Arc { lo, hi } => {
-                        if lo <= hi {
-                            lo <= x && x <= hi
-                        } else {
-                            x >= lo || x <= hi
+        verus! {
+            impl Wrapped<$ty> {
+                /// Membership predicate (concretization): mathematical spec.
+                pub open spec fn has(self, x: $ty) -> bool {
+                    match self {
+                        Wrapped::Bottom => false,
+                        Wrapped::Top => true,
+                        Wrapped::Arc { lo, hi } => {
+                            if lo <= hi {
+                                lo <= x && x <= hi
+                            } else {
+                                x >= lo || x <= hi
+                            }
                         }
                     }
                 }
-            }
 
-            /// Executable membership check that provably matches the mathematical `has` spec.
-            pub fn contains(&self, x: $ty) -> (res: bool)
-                ensures res == self.has(x)
-            {
-                match *self {
-                    Wrapped::Bottom => false,
-                    Wrapped::Top => true,
-                    Wrapped::Arc { lo, hi } => {
-                        if lo <= hi {
-                            lo <= x && x <= hi
-                        } else {
-                            x >= lo || x <= hi
+                /// Executable membership check that provably matches the mathematical `has` spec.
+                pub fn contains(&self, x: $ty) -> (res: bool)
+                    ensures res == self.has(x)
+                {
+                    match *self {
+                        Wrapped::Bottom => false,
+                        Wrapped::Top => true,
+                        Wrapped::Arc { lo, hi } => {
+                            if lo <= hi {
+                                lo <= x && x <= hi
+                            } else {
+                                x >= lo || x <= hi
+                            }
                         }
                     }
                 }
-            }
 
-            /// Constructor for a constant / singleton value.
-            pub open spec fn constant(val: $ty) -> Self {
-                Wrapped::Arc { lo: val, hi: val }
-            }
+                /// Constructor for a constant / singleton value.
+                pub open spec fn constant(val: $ty) -> Self {
+                    Wrapped::Arc { lo: val, hi: val }
+                }
 
-            /// Check if interval represents an empty set.
-            pub open spec fn is_bottom(self) -> bool {
-                match self {
-                    Wrapped::Bottom => true,
-                    _ => false,
+                /// Check if interval represents an empty set.
+                pub open spec fn is_bottom(self) -> bool {
+                    match self {
+                        Wrapped::Bottom => true,
+                        _ => false,
+                    }
+                }
+
+                /// Check if interval represents the full universe.
+                pub open spec fn is_top(self) -> bool {
+                    match self {
+                        Wrapped::Top => true,
+                        _ => false,
+                    }
                 }
             }
-
-            /// Check if interval represents the full universe.
-            pub open spec fn is_top(self) -> bool {
-                match self {
-                    Wrapped::Top => true,
-                    _ => false,
-                }
-            }
-        }
+        } // verus!
     }
 }
 
@@ -1617,5 +1622,3 @@ impl_wrapped_domain!(i16);
 impl_wrapped_domain!(i32);
 impl_wrapped_domain!(i64);
 impl_wrapped_domain!(i128);
-
-} // verus!
