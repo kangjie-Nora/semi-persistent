@@ -107,8 +107,9 @@ checks for full-circle arcs, singletons, signed/unsigned extrema, exact sampled
 membership and idempotence. These wider checks are not exhaustive.
 
 The full crate now has 64 passing tests (32 existing, 13 oracle, 19 production)
-and one ignored doctest. Verus reports 1015 verified, 0 errors, with the existing
-derived Clone warning. Canonical output and idempotence are tested; the new
+and one ignored doctest at normalization integration. The subsequent explicit
+Clone implementation and its regression bring the totals to 65 passing tests
+(20 production tests). Verus reports 1015 verified, 0 errors, with no warnings. Canonical output and idempotence are tested; the new
 universal postcondition proves exact membership preservation, not separate
 canonicality/idempotence postconditions.
 
@@ -120,3 +121,13 @@ Later operations should normalize their outputs under the agreed convention.
 Only use exhaustive small-width operation tests for implementations with matching
 width semantics. Wider tests remain sampled. Algebraic laws must be considered
 individually because wrapped intervals are not an ordinary lattice.
+
+
+## Explicit Clone contract
+
+Replaced derived Clone with an explicit implementation for `Wrapped<T>` where
+`T: Copy`, ensuring the copied result equals the original. All ten supported
+primitive types satisfy Copy. Non-Copy generic endpoint types do not implement
+Clone through this implementation and are not supported wrapped domains here.
+A runtime regression covers all variants across the ten supported types. This
+removes the Verus warning by supplying and verifying a contract, not suppressing it.

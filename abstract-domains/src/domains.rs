@@ -1537,7 +1537,7 @@ use vstd::prelude::*;
 verus! {
 
 /// Sign-agnostic wrapped interval parameterized by the integer type.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, PartialEq, Eq)]
 pub enum Wrapped<T> {
     /// Canonical empty set (no concrete values).
     Bottom,
@@ -1546,6 +1546,14 @@ pub enum Wrapped<T> {
     /// Arc from `lo` clockwise to `hi`; raw construction can represent a full circle.
     /// Call normalize to convert full-circle arcs to Top.
     Arc { lo: T, hi: T },
+}
+
+impl<T: Copy> Clone for Wrapped<T> {
+    fn clone(&self) -> (result: Self)
+        ensures result == *self
+    {
+        *self
+    }
 }
 
 } // verus!

@@ -77,15 +77,17 @@ L4 soundness work.
 `Wrapped<T>::contains` verifies `result == self.has(x)` for u8/u16/u32/u64/u128
 and i8/i16/i32/i64/i128. This is membership/spec correspondence, not an arithmetic
 transfer containment theorem. The macro expansion fix allows ordinary Rust and
-Verus to process the same implementations. Verus reports a warning about derived
-Clone having no explicit specification; no new proof escape was added.
+Verus to process the same implementations. An explicit `Clone` implementation for `T: Copy` verifies `result == *self`;
+all ten supported integer types satisfy this bound. No warning suppression or
+proof escape was added.
 
 The membership subset contains 10 production tests:
 exhaustive u8/i8 endpoint/value combinations and sampled boundary cases for all
 wider types. `wrapped_oracle` has 13 reference self-tests. The current totals including normalization are listed below; one doctest is ignored.
 Executable normalize now verifies exact membership preservation for all ten types:
 `forall|x| result.has(x) == self.has(x)`. Nine additional normalization tests bring
-the production target to 19 tests and the full crate to 64 passing tests.
+the production target to 19 tests; an additional Clone regression brings
+the current totals to 20 production tests and 65 passing crate tests.
 Canonical output and idempotence are tested, not separate verified postconditions.
 Raw full-circle Arc values remain constructible; callers must invoke normalize.
 Join/meet and wrapped arithmetic remain unimplemented and unverified here.

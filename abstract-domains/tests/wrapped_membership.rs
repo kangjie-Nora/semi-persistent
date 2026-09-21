@@ -206,3 +206,33 @@ normalization_boundary_test!(i16_normalization, i16, u16);
 normalization_boundary_test!(i32_normalization, i32, u32);
 normalization_boundary_test!(i64_normalization, i64, u64);
 normalization_boundary_test!(i128_normalization, i128, u128);
+
+#[test]
+#[allow(clippy::clone_on_copy)]
+fn explicit_clone_preserves_all_variants_for_supported_types() {
+    macro_rules! check {
+        ($ty:ty) => {
+            for value in [
+                Wrapped::<$ty>::Bottom,
+                Wrapped::<$ty>::Top,
+                Wrapped::<$ty>::Arc {
+                    lo: <$ty>::MAX,
+                    hi: <$ty>::MIN,
+                },
+                Wrapped::<$ty>::Arc { lo: 0, hi: 0 },
+            ] {
+                assert!(value.clone() == value);
+            }
+        };
+    }
+    check!(u8);
+    check!(u16);
+    check!(u32);
+    check!(u64);
+    check!(u128);
+    check!(i8);
+    check!(i16);
+    check!(i32);
+    check!(i64);
+    check!(i128);
+}
