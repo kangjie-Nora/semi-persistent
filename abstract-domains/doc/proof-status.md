@@ -1,12 +1,12 @@
 # Abstract Domains Proof Status
 
-Last refreshed: 2026-09-19.
+Last refreshed: 2026-09-20.
 
 ## Current result
 
 ```text
 cargo verus verify
-1005 verified, 0 errors
+1015 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -80,9 +80,12 @@ transfer containment theorem. The macro expansion fix allows ordinary Rust and
 Verus to process the same implementations. Verus reports a warning about derived
 Clone having no explicit specification; no new proof escape was added.
 
-The separate `wrapped_membership` target has 10 passing production tests:
+The membership subset contains 10 production tests:
 exhaustive u8/i8 endpoint/value combinations and sampled boundary cases for all
-wider types. `wrapped_oracle` has 13 reference self-tests. Together with the 32
-existing mirror tests, the crate has 55 passing tests and one ignored doctest.
-No executable normalization, join/meet, or wrapped arithmetic is yet covered.
-Raw full-circle Arc values remain constructible; canonicalization is not enforced.
+wider types. `wrapped_oracle` has 13 reference self-tests. The current totals including normalization are listed below; one doctest is ignored.
+Executable normalize now verifies exact membership preservation for all ten types:
+`forall|x| result.has(x) == self.has(x)`. Nine additional normalization tests bring
+the production target to 19 tests and the full crate to 64 passing tests.
+Canonical output and idempotence are tested, not separate verified postconditions.
+Raw full-circle Arc values remain constructible; callers must invoke normalize.
+Join/meet and wrapped arithmetic remain unimplemented and unverified here.

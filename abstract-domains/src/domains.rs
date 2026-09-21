@@ -1544,7 +1544,7 @@ pub enum Wrapped<T> {
     /// Canonical full set (all values for the type).
     Top,
     /// Arc from `lo` clockwise to `hi`; raw construction can represent a full circle.
-    /// Canonical normalization is not implemented yet.
+    /// Call normalize to convert full-circle arcs to Top.
     Arc { lo: T, hi: T },
 }
 
@@ -1583,6 +1583,26 @@ macro_rules! impl_wrapped_domain {
                                 x >= lo || x <= hi
                             }
                         }
+                    }
+                }
+
+                /// Normalizes the representation by converting full-circle arcs to Top.
+                pub fn normalize(self) -> (res: Self)
+                    ensures
+                        // Preserve exact concrete membership.
+                        forall|x: $ty| res.has(x) == self.has(x)
+                {
+                    match self {
+                        Wrapped::Arc { lo, hi } => {
+                            // A full circle occurs when lo is exactly one step ahead of hi
+                            // (using wrapping_add to safely handle the max-to-min boundary)
+                            if lo == hi.wrapping_add(1) {
+                                Wrapped::Top
+                            } else {
+                                self
+                            }
+                        },
+                        _ => self,
                     }
                 }
 

@@ -2,8 +2,8 @@
 
 This PR provides an independent finite-set reference and an exhaustive test
 harness. Production `Wrapped<T>::contains` is now connected in a separate
-`wrapped_membership` test target. No production normalization, join/meet, or
-arithmetic is implemented or validated by this harness.
+`wrapped_membership` test target. Production normalization is also connected; join/meet and arithmetic remain
+outside this integration.
 
 ## Run
 
@@ -67,7 +67,7 @@ For the 4-bit intersection of Arc(12,6) and Arc(4,14), the exact result is
 arc is a sound but inexact cover in this example. This PR deliberately does not
 choose or implement a join/meet algorithm or tie-break policy.
 
-## Production membership integration (2026-09-19)
+## Production membership integration (2026-09-19; validation superseded below)
 
 PR #2 was merged into this fork's main and integrated into the test branch.
 It supplies `Wrapped<T>` for u8/u16/u32/u64/u128 and i8/i16/i32/i64/i128.
@@ -94,23 +94,29 @@ The executable membership contract `result == self.has(x)` verifies for all ten
 implementations. A warning remains for the derived Clone lacking an explicit
 specification; this is not a membership verification failure.
 
-## Normalization boundary and remaining work
+## Production normalization integration (2026-09-20)
 
-The agreed convention is singleton for equal endpoints and Top for full-circle
-results. The current public enum still allows noncanonical full-circle arcs;
-there is no executable normalizer or constructor enforcing the convention.
-Membership tests deliberately check raw arcs, including full-circle arcs. They
-do not claim canonicalization is implemented. `constant`, `is_top`, and
-`is_bottom` remain spec-only; `is_top` identifies the Top variant, not every raw
-arc whose represented set is full.
+Integrated Vignesvern's normalize implementation from commit 61c304c, retaining
+the macro expansion fix. Full-circle arcs become Top; other values are unchanged.
+Its universal membership-preservation contract verifies for all ten types.
 
-Next, connect executable normalization when provided and check exact set
-preservation and canonical output. For production join/meet and arithmetic,
-compare against concrete reference results using containment, requiring exactness
-only when appropriate. Never discard a split-intersection component.
+Nine additional production tests compare normalized u8/i8 values with the
+independent ring oracle across all raw representations and concrete values.
+They also check canonical output and idempotence. Wider types have boundary
+checks for full-circle arcs, singletons, signed/unsigned extrema, exact sampled
+membership and idempotence. These wider checks are not exhaustive.
+
+The full crate now has 64 passing tests (32 existing, 13 oracle, 19 production)
+and one ignored doctest. Verus reports 1015 verified, 0 errors, with the existing
+derived Clone warning. Canonical output and idempotence are tested; the new
+universal postcondition proves exact membership preservation, not separate
+canonicality/idempotence postconditions.
+
+The public enum still permits raw full-circle Arc construction; callers must
+invoke normalize to obtain canonical values. constant/is_top/is_bottom remain
+spec-only. No join/meet, wrapped arithmetic or conversion is implemented here.
+Later operations should normalize their outputs under the agreed convention.
 
 Only use exhaustive small-width operation tests for implementations with matching
-width semantics: restricting u32 operands to 0..15 does not make them 4-bit
-values. Conversions that need a sound cover must not be tested as exact equality.
-Required algebraic laws and deterministic tie-breaks must be agreed individually;
-wrapped intervals do not form an ordinary lattice.
+width semantics. Wider tests remain sampled. Algebraic laws must be considered
+individually because wrapped intervals are not an ordinary lattice.
