@@ -1,12 +1,12 @@
 # Abstract Domains Proof Status
 
-Last refreshed: 2026-09-20.
+Last refreshed: 2026-09-23.
 
 ## Current result
 
 ```text
 cargo verus verify
-1015 verified, 0 errors
+1016 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -72,22 +72,19 @@ containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
 
 
-## Wrapped membership
+## Wrapped membership and normalization
 
-`Wrapped<T>::contains` verifies `result == self.has(x)` for u8/u16/u32/u64/u128
-and i8/i16/i32/i64/i128. This is membership/spec correspondence, not an arithmetic
-transfer containment theorem. The macro expansion fix allows ordinary Rust and
-Verus to process the same implementations. An explicit `Clone` implementation for `T: Copy` verifies `result == *self`;
-all ten supported integer types satisfy this bound. No warning suppression or
-proof escape was added.
+`AbstractValue<D>` provides Bot/NonBot; `Wrapped<T>` has only nonempty Top/Arc.
+For u8/u16/u32/u64/u128 and i8/i16/i32/i64/i128, contains verifies
+`result == self.has(x)` and normalize verifies universal exact membership
+preservation. Explicit Clone implementations for Wrapped<T> (T: Copy) and
+AbstractValue<D> (D: Copy) verify equality with the original.
 
-The membership subset contains 10 production tests:
-exhaustive u8/i8 endpoint/value combinations and sampled boundary cases for all
-wider types. `wrapped_oracle` has 13 reference self-tests. The current totals including normalization are listed below; one doctest is ignored.
-Executable normalize now verifies exact membership preservation for all ten types:
-`forall|x| result.has(x) == self.has(x)`. Nine additional normalization tests bring
-the production target to 19 tests; an additional Clone regression brings
-the current totals to 20 production tests and 65 passing crate tests.
-Canonical output and idempotence are tested, not separate verified postconditions.
-Raw full-circle Arc values remain constructible; callers must invoke normalize.
-Join/meet and wrapped arithmetic remain unimplemented and unverified here.
+The production harness has 13 test functions: exhaustive u8/i8 membership and
+normalization, boundary/wrapper/Clone suites for ten types, and a u32 adapter.
+Together with 13 oracle self-tests and 32 existing tests, 58 tests pass; one
+doctest is ignored. Tests were regrouped; former counts are not comparable
+one-for-one. Canonicality and idempotence are tested, not separate formal contracts.
+Raw Arc construction can be noncanonical until normalize is called. Test-only
+wrapper lifting does not establish a generic production lifted API or product
+consistency. Join/meet, arithmetic and conversions remain future work.

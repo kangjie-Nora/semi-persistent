@@ -1536,28 +1536,45 @@ use vstd::prelude::*;
 
 verus! {
 
-/// Sign-agnostic wrapped interval parameterized by the integer type.
+/// Global wrapper to canonically represent empty sets (unreachability) across all domains.
 #[derive(Copy, PartialEq, Eq)]
-pub enum Wrapped<T> {
-    /// Canonical empty set (no concrete values).
-    Bottom,
-    /// Canonical full set (all values for the type).
-    Top,
-    /// Arc from `lo` clockwise to `hi`; raw construction can represent a full circle.
-    /// Call normalize to convert full-circle arcs to Top.
-    Arc { lo: T, hi: T },
+pub enum AbstractValue<D> {
+    Bot,
+    NonBot(D),
 }
 
-impl<T: Copy> Clone for Wrapped<T> {
-    fn clone(&self) -> (result: Self)
-        ensures result == *self
+// Explicit Clone implementation to satisfy Verus verification contracts
+impl<D: Copy> Clone for AbstractValue<D> {
+    fn clone(&self) -> (res: Self)
+        ensures res == *self
     {
         *self
     }
 }
 
-} // verus!
+/// Sign-agnostic wrapped interval parameterized by the integer type.
+/// Guaranteed to be non-empty. Emptiness is now handled by `AbstractValue`.
+#[derive(Copy, PartialEq, Eq)]
+pub enum Wrapped<T> {
+    /// Canonical full set (all values for the type).
+    Top,
+    /// Nonempty arc; call normalize to canonicalize full-circle representations.
+    Arc { lo: T, hi: T },
+}
 
+// Explicit Clone implementation to satisfy Verus verification contracts
+impl<T: Copy> Clone for Wrapped<T> {
+    fn clone(&self) -> (res: Self)
+        ensures res == *self
+    {
+        *self
+    }
+}
+
+} // end verus!
+
+// The macro must live OUTSIDE the main verus! block, and generate its own verus! block
+// inside the expansion so the Verus parser processes it correctly.
 macro_rules! impl_wrapped_domain {
     ($ty:ty) => {
         verus! {
@@ -1565,7 +1582,6 @@ macro_rules! impl_wrapped_domain {
                 /// Membership predicate (concretization): mathematical spec.
                 pub open spec fn has(self, x: $ty) -> bool {
                     match self {
-                        Wrapped::Bottom => false,
                         Wrapped::Top => true,
                         Wrapped::Arc { lo, hi } => {
                             if lo <= hi {
@@ -1582,7 +1598,6 @@ macro_rules! impl_wrapped_domain {
                     ensures res == self.has(x)
                 {
                     match *self {
-                        Wrapped::Bottom => false,
                         Wrapped::Top => true,
                         Wrapped::Arc { lo, hi } => {
                             if lo <= hi {
@@ -1597,13 +1612,10 @@ macro_rules! impl_wrapped_domain {
                 /// Normalizes the representation by converting full-circle arcs to Top.
                 pub fn normalize(self) -> (res: Self)
                     ensures
-                        // Preserve exact concrete membership.
                         forall|x: $ty| res.has(x) == self.has(x)
                 {
                     match self {
                         Wrapped::Arc { lo, hi } => {
-                            // A full circle occurs when lo is exactly one step ahead of hi
-                            // (using wrapping_add to safely handle the max-to-min boundary)
                             if lo == hi.wrapping_add(1) {
                                 Wrapped::Top
                             } else {
@@ -1619,14 +1631,6 @@ macro_rules! impl_wrapped_domain {
                     Wrapped::Arc { lo: val, hi: val }
                 }
 
-                /// Check if interval represents an empty set.
-                pub open spec fn is_bottom(self) -> bool {
-                    match self {
-                        Wrapped::Bottom => true,
-                        _ => false,
-                    }
-                }
-
                 /// Check if interval represents the full universe.
                 pub open spec fn is_top(self) -> bool {
                     match self {
@@ -1635,7 +1639,7 @@ macro_rules! impl_wrapped_domain {
                     }
                 }
             }
-        } // verus!
+        } // end inner verus!
     }
 }
 
