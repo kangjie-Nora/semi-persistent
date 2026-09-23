@@ -1536,73 +1536,110 @@ use vstd::prelude::*;
 
 verus! {
 
+/// Global wrapper to canonically represent empty sets (unreachability) across all domains.
+#[derive(Copy, PartialEq, Eq)]
+pub enum AbstractValue<D> {
+    Bot,
+    NonBot(D),
+}
+
+// Explicit Clone implementation to satisfy Verus verification contracts
+impl<D: Copy> Clone for AbstractValue<D> {
+    fn clone(&self) -> (res: Self)
+        ensures res == *self
+    {
+        *self
+    }
+}
+
 /// Sign-agnostic wrapped interval parameterized by the integer type.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Guaranteed to be non-empty. Emptiness is now handled by `AbstractValue`.
+#[derive(Copy, PartialEq, Eq)]
 pub enum Wrapped<T> {
-    /// Canonical empty set (no concrete values).
-    Bottom,
     /// Canonical full set (all values for the type).
     Top,
-    /// Canonical arc from `lo` clockwise to `hi`.
+    /// Nonempty arc; call normalize to canonicalize full-circle representations.
     Arc { lo: T, hi: T },
 }
 
+// Explicit Clone implementation to satisfy Verus verification contracts
+impl<T: Copy> Clone for Wrapped<T> {
+    fn clone(&self) -> (res: Self)
+        ensures res == *self
+    {
+        *self
+    }
+}
+
+} // end verus!
+
+// The macro must live OUTSIDE the main verus! block, and generate its own verus! block
+// inside the expansion so the Verus parser processes it correctly.
 macro_rules! impl_wrapped_domain {
     ($ty:ty) => {
-        impl Wrapped<$ty> {
-            /// Membership predicate (concretization): mathematical spec.
-            pub open spec fn has(self, x: $ty) -> bool {
-                match self {
-                    Wrapped::Bottom => false,
-                    Wrapped::Top => true,
-                    Wrapped::Arc { lo, hi } => {
-                        if lo <= hi {
-                            lo <= x && x <= hi
-                        } else {
-                            x >= lo || x <= hi
+        verus! {
+            impl Wrapped<$ty> {
+                /// Membership predicate (concretization): mathematical spec.
+                pub open spec fn has(self, x: $ty) -> bool {
+                    match self {
+                        Wrapped::Top => true,
+                        Wrapped::Arc { lo, hi } => {
+                            if lo <= hi {
+                                lo <= x && x <= hi
+                            } else {
+                                x >= lo || x <= hi
+                            }
                         }
                     }
                 }
-            }
 
-            /// Executable membership check that provably matches the mathematical `has` spec.
-            pub fn contains(&self, x: $ty) -> (res: bool)
-                ensures res == self.has(x)
-            {
-                match *self {
-                    Wrapped::Bottom => false,
-                    Wrapped::Top => true,
-                    Wrapped::Arc { lo, hi } => {
-                        if lo <= hi {
-                            lo <= x && x <= hi
-                        } else {
-                            x >= lo || x <= hi
+                /// Executable membership check that provably matches the mathematical `has` spec.
+                pub fn contains(&self, x: $ty) -> (res: bool)
+                    ensures res == self.has(x)
+                {
+                    match *self {
+                        Wrapped::Top => true,
+                        Wrapped::Arc { lo, hi } => {
+                            if lo <= hi {
+                                lo <= x && x <= hi
+                            } else {
+                                x >= lo || x <= hi
+                            }
                         }
                     }
                 }
-            }
 
-            /// Constructor for a constant / singleton value.
-            pub open spec fn constant(val: $ty) -> Self {
-                Wrapped::Arc { lo: val, hi: val }
-            }
+                /// Normalizes the representation by converting full-circle arcs to Top.
+                pub fn normalize(self) -> (res: Self)
+                    ensures
+                        forall|x: $ty| res.has(x) == self.has(x)
+                {
+                    match self {
+                        Wrapped::Arc { lo, hi } => {
+                            if lo == hi.wrapping_add(1) {
+                                Wrapped::Top
+                            } else {
+                                self
+                            }
+                        },
+                        _ => self,
+                    }
+                }
 
-            /// Check if interval represents an empty set.
-            pub open spec fn is_bottom(self) -> bool {
-                match self {
-                    Wrapped::Bottom => true,
-                    _ => false,
+                /// Constructor for a constant / singleton value.
+                pub open spec fn constant(val: $ty) -> Self {
+                    Wrapped::Arc { lo: val, hi: val }
+                }
+
+                /// Check if interval represents the full universe.
+                pub open spec fn is_top(self) -> bool {
+                    match self {
+                        Wrapped::Top => true,
+                        _ => false,
+                    }
                 }
             }
-
-            /// Check if interval represents the full universe.
-            pub open spec fn is_top(self) -> bool {
-                match self {
-                    Wrapped::Top => true,
-                    _ => false,
-                }
-            }
-        }
+        } // end inner verus!
     }
 }
 
@@ -1617,5 +1654,3 @@ impl_wrapped_domain!(i16);
 impl_wrapped_domain!(i32);
 impl_wrapped_domain!(i64);
 impl_wrapped_domain!(i128);
-
-} // verus!
