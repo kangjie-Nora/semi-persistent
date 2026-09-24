@@ -6,7 +6,7 @@ Last refreshed: 2026-09-23.
 
 ```text
 cargo verus verify
-1016 verified, 0 errors
+1036 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -87,4 +87,20 @@ doctest is ignored. Tests were regrouped; former counts are not comparable
 one-for-one. Canonicality and idempotence are tested, not separate formal contracts.
 Raw Arc construction can be noncanonical until normalize is called. Test-only
 wrapper lifting does not establish a generic production lifted API or product
-consistency. Join/meet, arithmetic and conversions remain future work.
+consistency. Wrapped join/meet coverage is listed below; arithmetic and conversions remain future work.
+
+
+## Wrapped join/meet
+
+Universal containment postconditions now verify for Wrapped::join and
+Wrapped::meet across all ten primitive integer types. This does not establish
+optimal precision or conventional lattice laws. Split meet selects the smaller
+operand cover; disjoint join selects the smaller of the two connecting arcs.
+Ties use the unsigned start bits. Precision and commutativity are runtime-tested,
+not additional universal Verus theorems.
+
+14 new production tests cover the known unsound join regression, split meet,
+66,049 sampled-endpoint u8 input pairs with every concrete u8 value, and
+signed/unsigned boundary witnesses. Full crate: 72 tests pass, one ignored
+doctest. Production generic lifted AbstractValue operations and Sign are not
+part of this addition. No new admit/assume calls or dependencies were added.
