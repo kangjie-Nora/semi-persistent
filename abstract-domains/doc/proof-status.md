@@ -103,6 +103,6 @@ to has; from_value proves containment of its input; Clone proves equality.
 Eight new production tests check all eight states, exact operations for all i8
 values, five signed-width boundaries, and lattice laws over all state triples.
 The lattice-law checks are tests, not additional machine-checked theorem functions.
-Full branch: 66 tests passed, one ignored doctest; 1024 crate obligations verified.
+Full crate: 66 tests passed, one ignored doctest; 1024 crate obligations verified.
 Arithmetic, Sign–Interval reduction and e-graph integration are not implemented.
 See [Sign validation](testing/sign-domain.md) for the interface and proof scope.
