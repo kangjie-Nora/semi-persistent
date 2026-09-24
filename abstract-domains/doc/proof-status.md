@@ -90,7 +90,7 @@ wrapper lifting does not establish a generic production lifted API or product
 consistency. Wrapped join/meet coverage is listed below; arithmetic and conversions remain future work.
 
 
-## Wrapped join/meet (second-stage branch)
+## Wrapped join/meet
 
 Universal containment postconditions now verify for Wrapped::join and
 Wrapped::meet across all ten primitive integer types. This does not establish
