@@ -14,6 +14,261 @@ impl Clone for Sign {
 }
 
 impl Sign {
+
+    /// Negation over mathematical integers (no finite-width wrapping).
+    pub fn neg_math(self) -> (r: Self)
+        ensures forall|x: int| self.has(x) ==> r.has(-x)
+    {
+        match self {
+            Self::Neg => Self::Pos, Self::Pos => Self::Neg,
+            Self::NonNeg => Self::NonPos, Self::NonPos => Self::NonNeg,
+            Self::Zero => Self::Zero, Self::NonZero => Self::NonZero,
+            Self::Top => Self::Top,
+        }
+    }
+
+    /// Sound transfer over mathematical integers, without overflow.
+    pub fn add_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x + y)
+    {
+        let result = match (self, other) {
+            (Self::Neg, Self::Neg) |
+            (Self::Neg, Self::Zero) |
+            (Self::Neg, Self::NonPos) |
+            (Self::Zero, Self::Neg) |
+            (Self::NonPos, Self::Neg) => Self::Neg,
+            (Self::Zero, Self::Zero) => Self::Zero,
+            (Self::Zero, Self::Pos) |
+            (Self::Pos, Self::Zero) |
+            (Self::Pos, Self::Pos) |
+            (Self::Pos, Self::NonNeg) |
+            (Self::NonNeg, Self::Pos) => Self::Pos,
+            (Self::Zero, Self::NonPos) |
+            (Self::NonPos, Self::Zero) |
+            (Self::NonPos, Self::NonPos) => Self::NonPos,
+            (Self::Zero, Self::NonNeg) |
+            (Self::NonNeg, Self::Zero) |
+            (Self::NonNeg, Self::NonNeg) => Self::NonNeg,
+            (Self::Zero, Self::NonZero) |
+            (Self::NonZero, Self::Zero) => Self::NonZero,
+            (Self::Neg, Self::Pos) |
+            (Self::Neg, Self::NonNeg) |
+            (Self::Neg, Self::NonZero) |
+            (Self::Neg, Self::Top) |
+            (Self::Zero, Self::Top) |
+            (Self::Pos, Self::Neg) |
+            (Self::Pos, Self::NonPos) |
+            (Self::Pos, Self::NonZero) |
+            (Self::Pos, Self::Top) |
+            (Self::NonPos, Self::Pos) |
+            (Self::NonPos, Self::NonNeg) |
+            (Self::NonPos, Self::NonZero) |
+            (Self::NonPos, Self::Top) |
+            (Self::NonNeg, Self::Neg) |
+            (Self::NonNeg, Self::NonPos) |
+            (Self::NonNeg, Self::NonZero) |
+            (Self::NonNeg, Self::Top) |
+            (Self::NonZero, Self::Neg) |
+            (Self::NonZero, Self::Pos) |
+            (Self::NonZero, Self::NonPos) |
+            (Self::NonZero, Self::NonNeg) |
+            (Self::NonZero, Self::NonZero) |
+            (Self::NonZero, Self::Top) |
+            (Self::Top, Self::Neg) |
+            (Self::Top, Self::Zero) |
+            (Self::Top, Self::Pos) |
+            (Self::Top, Self::NonPos) |
+            (Self::Top, Self::NonNeg) |
+            (Self::Top, Self::NonZero) |
+            (Self::Top, Self::Top) => Self::Top,
+        };
+        result
+    }
+
+    /// Sound transfer over mathematical integers, without overflow.
+    pub fn mul_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x * y)
+    {
+        let result = match (self, other) {
+            (Self::Neg, Self::Pos) |
+            (Self::Pos, Self::Neg) => Self::Neg,
+            (Self::Neg, Self::Zero) |
+            (Self::Zero, Self::Neg) |
+            (Self::Zero, Self::Zero) |
+            (Self::Zero, Self::Pos) |
+            (Self::Zero, Self::NonPos) |
+            (Self::Zero, Self::NonNeg) |
+            (Self::Zero, Self::NonZero) |
+            (Self::Zero, Self::Top) |
+            (Self::Pos, Self::Zero) |
+            (Self::NonPos, Self::Zero) |
+            (Self::NonNeg, Self::Zero) |
+            (Self::NonZero, Self::Zero) |
+            (Self::Top, Self::Zero) => Self::Zero,
+            (Self::Neg, Self::Neg) |
+            (Self::Pos, Self::Pos) => Self::Pos,
+            (Self::Neg, Self::NonNeg) |
+            (Self::Pos, Self::NonPos) |
+            (Self::NonPos, Self::Pos) |
+            (Self::NonPos, Self::NonNeg) |
+            (Self::NonNeg, Self::Neg) |
+            (Self::NonNeg, Self::NonPos) => Self::NonPos,
+            (Self::Neg, Self::NonPos) |
+            (Self::Pos, Self::NonNeg) |
+            (Self::NonPos, Self::Neg) |
+            (Self::NonPos, Self::NonPos) |
+            (Self::NonNeg, Self::Pos) |
+            (Self::NonNeg, Self::NonNeg) => Self::NonNeg,
+            (Self::Neg, Self::NonZero) |
+            (Self::Pos, Self::NonZero) |
+            (Self::NonZero, Self::Neg) |
+            (Self::NonZero, Self::Pos) |
+            (Self::NonZero, Self::NonZero) => Self::NonZero,
+            (Self::Neg, Self::Top) |
+            (Self::Pos, Self::Top) |
+            (Self::NonPos, Self::NonZero) |
+            (Self::NonPos, Self::Top) |
+            (Self::NonNeg, Self::NonZero) |
+            (Self::NonNeg, Self::Top) |
+            (Self::NonZero, Self::NonPos) |
+            (Self::NonZero, Self::NonNeg) |
+            (Self::NonZero, Self::Top) |
+            (Self::Top, Self::Neg) |
+            (Self::Top, Self::Pos) |
+            (Self::Top, Self::NonPos) |
+            (Self::Top, Self::NonNeg) |
+            (Self::Top, Self::NonZero) |
+            (Self::Top, Self::Top) => Self::Top,
+        };
+        assert forall|x: int, y: int| self.has(x) && other.has(y)
+            implies result.has(x * y) by {
+            multiplication_signs(x, y);
+        }
+        result
+    }
+
+    /// Sound transfer over mathematical integers, without overflow.
+    pub fn min_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(if x <= y { x } else { y })
+    {
+        let result = match (self, other) {
+            (Self::Neg, Self::Neg) |
+            (Self::Neg, Self::Zero) |
+            (Self::Neg, Self::Pos) |
+            (Self::Neg, Self::NonPos) |
+            (Self::Neg, Self::NonNeg) |
+            (Self::Neg, Self::NonZero) |
+            (Self::Neg, Self::Top) |
+            (Self::Zero, Self::Neg) |
+            (Self::Pos, Self::Neg) |
+            (Self::NonPos, Self::Neg) |
+            (Self::NonNeg, Self::Neg) |
+            (Self::NonZero, Self::Neg) |
+            (Self::Top, Self::Neg) => Self::Neg,
+            (Self::Zero, Self::Zero) |
+            (Self::Zero, Self::Pos) |
+            (Self::Zero, Self::NonNeg) |
+            (Self::Pos, Self::Zero) |
+            (Self::NonNeg, Self::Zero) => Self::Zero,
+            (Self::Pos, Self::Pos) => Self::Pos,
+            (Self::Zero, Self::NonPos) |
+            (Self::Zero, Self::NonZero) |
+            (Self::Zero, Self::Top) |
+            (Self::Pos, Self::NonPos) |
+            (Self::NonPos, Self::Zero) |
+            (Self::NonPos, Self::Pos) |
+            (Self::NonPos, Self::NonPos) |
+            (Self::NonPos, Self::NonNeg) |
+            (Self::NonPos, Self::NonZero) |
+            (Self::NonPos, Self::Top) |
+            (Self::NonNeg, Self::NonPos) |
+            (Self::NonZero, Self::Zero) |
+            (Self::NonZero, Self::NonPos) |
+            (Self::Top, Self::Zero) |
+            (Self::Top, Self::NonPos) => Self::NonPos,
+            (Self::Pos, Self::NonNeg) |
+            (Self::NonNeg, Self::Pos) |
+            (Self::NonNeg, Self::NonNeg) => Self::NonNeg,
+            (Self::Pos, Self::NonZero) |
+            (Self::NonZero, Self::Pos) |
+            (Self::NonZero, Self::NonZero) => Self::NonZero,
+            (Self::Pos, Self::Top) |
+            (Self::NonNeg, Self::NonZero) |
+            (Self::NonNeg, Self::Top) |
+            (Self::NonZero, Self::NonNeg) |
+            (Self::NonZero, Self::Top) |
+            (Self::Top, Self::Pos) |
+            (Self::Top, Self::NonNeg) |
+            (Self::Top, Self::NonZero) |
+            (Self::Top, Self::Top) => Self::Top,
+        };
+        result
+    }
+
+    /// Sound transfer over mathematical integers, without overflow.
+    pub fn max_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(if x >= y { x } else { y })
+    {
+        let result = match (self, other) {
+            (Self::Neg, Self::Neg) => Self::Neg,
+            (Self::Neg, Self::Zero) |
+            (Self::Zero, Self::Neg) |
+            (Self::Zero, Self::Zero) |
+            (Self::Zero, Self::NonPos) |
+            (Self::NonPos, Self::Zero) => Self::Zero,
+            (Self::Neg, Self::Pos) |
+            (Self::Zero, Self::Pos) |
+            (Self::Pos, Self::Neg) |
+            (Self::Pos, Self::Zero) |
+            (Self::Pos, Self::Pos) |
+            (Self::Pos, Self::NonPos) |
+            (Self::Pos, Self::NonNeg) |
+            (Self::Pos, Self::NonZero) |
+            (Self::Pos, Self::Top) |
+            (Self::NonPos, Self::Pos) |
+            (Self::NonNeg, Self::Pos) |
+            (Self::NonZero, Self::Pos) |
+            (Self::Top, Self::Pos) => Self::Pos,
+            (Self::Neg, Self::NonPos) |
+            (Self::NonPos, Self::Neg) |
+            (Self::NonPos, Self::NonPos) => Self::NonPos,
+            (Self::Neg, Self::NonNeg) |
+            (Self::Zero, Self::NonNeg) |
+            (Self::Zero, Self::NonZero) |
+            (Self::Zero, Self::Top) |
+            (Self::NonPos, Self::NonNeg) |
+            (Self::NonNeg, Self::Neg) |
+            (Self::NonNeg, Self::Zero) |
+            (Self::NonNeg, Self::NonPos) |
+            (Self::NonNeg, Self::NonNeg) |
+            (Self::NonNeg, Self::NonZero) |
+            (Self::NonNeg, Self::Top) |
+            (Self::NonZero, Self::Zero) |
+            (Self::NonZero, Self::NonNeg) |
+            (Self::Top, Self::Zero) |
+            (Self::Top, Self::NonNeg) => Self::NonNeg,
+            (Self::Neg, Self::NonZero) |
+            (Self::NonZero, Self::Neg) |
+            (Self::NonZero, Self::NonZero) => Self::NonZero,
+            (Self::Neg, Self::Top) |
+            (Self::NonPos, Self::NonZero) |
+            (Self::NonPos, Self::Top) |
+            (Self::NonZero, Self::NonPos) |
+            (Self::NonZero, Self::Top) |
+            (Self::Top, Self::Neg) |
+            (Self::Top, Self::NonPos) |
+            (Self::Top, Self::NonZero) |
+            (Self::Top, Self::Top) => Self::Top,
+        };
+        result
+    }
+
+    pub fn sub_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x - y)
+    {
+        self.add_math(other.neg_math())
+    }
+
     /// Mathematical integers; sign sets do not depend on machine width.
     pub open spec fn has(self, x: int) -> bool {
         match self {
@@ -156,6 +411,58 @@ impl Sign {
 
 /// Lifted operations cover empty inputs as well as nonempty Sign values.
 impl AbstractValue<Sign> {
+
+    pub fn add_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x + y)
+    {
+        match (self, other) {
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+            (Self::NonBot(a), Self::NonBot(b)) => Self::NonBot(a.add_math(b)),
+        }
+    }
+
+    pub fn mul_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x * y)
+    {
+        match (self, other) {
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+            (Self::NonBot(a), Self::NonBot(b)) => Self::NonBot(a.mul_math(b)),
+        }
+    }
+
+    pub fn min_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(if x <= y { x } else { y })
+    {
+        match (self, other) {
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+            (Self::NonBot(a), Self::NonBot(b)) => Self::NonBot(a.min_math(b)),
+        }
+    }
+
+    pub fn max_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(if x >= y { x } else { y })
+    {
+        match (self, other) {
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+            (Self::NonBot(a), Self::NonBot(b)) => Self::NonBot(a.max_math(b)),
+        }
+    }
+
+    pub fn sub_math(self, other: Self) -> (r: Self)
+        ensures forall|x: int, y: int| self.has(x) && other.has(y) ==> r.has(x - y)
+    {
+        match (self, other) {
+            (Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+            (Self::NonBot(a), Self::NonBot(b)) => Self::NonBot(a.sub_math(b)),
+        }
+    }
+
+    pub fn neg_math(self) -> (r: Self)
+        ensures forall|x: int| self.has(x) ==> r.has(-x)
+    {
+        match self { Self::Bot => Self::Bot, Self::NonBot(a) => Self::NonBot(a.neg_math()) }
+    }
+
     pub open spec fn has(self, x: int) -> bool {
         match self { Self::Bot => false, Self::NonBot(s) => s.has(x) }
     }
@@ -184,4 +491,19 @@ impl AbstractValue<Sign> {
         }
     }
 }
+
+proof fn multiplication_signs(x: int, y: int)
+    ensures
+        x > 0 && y > 0 ==> x*y > 0,
+        x < 0 && y < 0 ==> x*y > 0,
+        x > 0 && y < 0 ==> x*y < 0,
+        x < 0 && y > 0 ==> x*y < 0,
+        x == 0 || y == 0 ==> x*y == 0,
+{
+    assert(x > 0 && y > 0 ==> x*y > 0) by(nonlinear_arith);
+    assert(x < 0 && y < 0 ==> x*y > 0) by(nonlinear_arith);
+    assert(x > 0 && y < 0 ==> x*y < 0) by(nonlinear_arith);
+    assert(x < 0 && y > 0 ==> x*y < 0) by(nonlinear_arith);
+}
+
 } // verus!

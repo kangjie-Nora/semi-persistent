@@ -108,3 +108,123 @@ fn concrete_constructor_and_clone() {
         assert!(a.clone() == a);
     }
 }
+
+#[test]
+fn arithmetic_all_i8_pairs_against_concrete_i128_results() {
+    for (a, sa) in CASES {
+        assert!(matches!(a.neg_math(), Bot) == matches!(a, Bot));
+        for x in i8::MIN..=i8::MAX {
+            let x = i128::from(x);
+            if reference(sa, x) {
+                assert!(a.neg_math().contains(-x));
+            }
+        }
+        for (b, sb) in CASES {
+            let results = [
+                a.add_math(b),
+                a.sub_math(b),
+                a.mul_math(b),
+                a.min_math(b),
+                a.max_math(b),
+            ];
+            let mut witnessed = [[false; 3]; 5];
+            for r in results {
+                assert!(matches!(r, Bot) == (matches!(a, Bot) || matches!(b, Bot)));
+            }
+            for x in i8::MIN..=i8::MAX {
+                let x = i128::from(x);
+                if !reference(sa, x) {
+                    continue;
+                }
+                for y in i8::MIN..=i8::MAX {
+                    let y = i128::from(y);
+                    if !reference(sb, y) {
+                        continue;
+                    }
+                    // Promote before computing: these are mathematical, not wrapping, results.
+                    for (i, value) in [x + y, x - y, x * y, x.min(y), x.max(y)]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        assert!(results[i].contains(value), "operation {i} lost {value}");
+                        witnessed[i][if value < 0 {
+                            0
+                        } else if value == 0 {
+                            1
+                        } else {
+                            2
+                        }] = true;
+                    }
+                }
+            }
+            // Every included sign category has a concrete witness in this finite range.
+            for (i, result) in results.into_iter().enumerate() {
+                for (j, x) in [-1, 0, 1].into_iter().enumerate() {
+                    assert_eq!(result.contains(x), witnessed[i][j]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn arithmetic_boundary_values_without_host_overflow() {
+    let xs = [
+        i128::MIN,
+        i128::MIN + 1,
+        -129,
+        -128,
+        -1,
+        0,
+        1,
+        127,
+        128,
+        i128::MAX - 1,
+        i128::MAX,
+    ];
+    for (a, sa) in CASES {
+        for x in xs {
+            if reference(sa, x) {
+                if let Some(n) = x.checked_neg() {
+                    assert!(a.neg_math().contains(n));
+                }
+            }
+        }
+        for (b, sb) in CASES {
+            for x in xs {
+                for y in xs {
+                    if !reference(sa, x) || !reference(sb, y) {
+                        continue;
+                    }
+                    for (result, concrete) in [
+                        (a.add_math(b), x.checked_add(y)),
+                        (a.sub_math(b), x.checked_sub(y)),
+                        (a.mul_math(b), x.checked_mul(y)),
+                        (a.min_math(b), Some(x.min(y))),
+                        (a.max_math(b), Some(x.max(y))),
+                    ] {
+                        if let Some(value) = concrete {
+                            assert!(result.contains(value));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mathematical_semantics_and_zero_precision_regressions() {
+    assert!(Sign::Pos.add_math(Sign::Pos) == Sign::Pos);
+    assert!(Sign::Pos.add_math(Sign::Pos).contains(127i128 + 1));
+    // i8 wrap-around would be negative: do not use this transfer for that operation.
+    assert!(!Sign::Pos
+        .add_math(Sign::Pos)
+        .contains(127i8.wrapping_add(1) as i128));
+    assert!(Sign::Top.mul_math(Sign::Zero) == Sign::Zero);
+    assert!(Sign::Neg.mul_math(Sign::Neg) == Sign::Pos);
+    assert!(Sign::Pos.sub_math(Sign::Pos) == Sign::Top);
+    assert!(Sign::NonZero.neg_math() == Sign::NonZero);
+    assert!(Sign::Neg.min_math(Sign::Pos) == Sign::Neg);
+    assert!(Sign::Neg.max_math(Sign::Pos) == Sign::Pos);
+}
