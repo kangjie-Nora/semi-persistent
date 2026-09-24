@@ -1576,7 +1576,7 @@ impl<T: Copy> Clone for Wrapped<T> {
 // The macro must live OUTSIDE the main verus! block, and generate its own verus! block
 // inside the expansion so the Verus parser processes it correctly.
 macro_rules! impl_wrapped_domain {
-    ($ty:ty) => {
+    ($ty:ty, $uty:ty) => {
         verus! {
             impl Wrapped<$ty> {
                 /// Membership predicate (concretization): mathematical spec.
@@ -1643,9 +1643,15 @@ macro_rules! impl_wrapped_domain {
                             let other_has_h1 = other.contains(*h1);
 
                             if self_has_l2 && self_has_h2 && other_has_l1 && other_has_h1 {
-                                // Two-arc split (both arcs contain each other's endpoints)
-                                // Returning `self` is a deterministic, sound over-approximation.
-                                AbstractValue::NonBot(self.normalize())
+                                // Both operands cover the exact split intersection. Choose
+                                // the smaller cover; break ties by unsigned start bits.
+                                let n1 = h1.wrapping_sub(*l1) as $uty;
+                                let n2 = h2.wrapping_sub(*l2) as $uty;
+                                if n1 < n2 || (n1 == n2 && (*l1 as $uty) <= (*l2 as $uty)) {
+                                    AbstractValue::NonBot(self.normalize())
+                                } else {
+                                    AbstractValue::NonBot(other.normalize())
+                                }
                             } else if self_has_l2 && other_has_h1 {
                                 AbstractValue::NonBot(Wrapped::Arc { lo: *l2, hi: *h1 }.normalize())
                             } else if other_has_l1 && self_has_h2 {
@@ -1687,8 +1693,15 @@ macro_rules! impl_wrapped_domain {
                             } else if other_has_l1 {
                                 Wrapped::Arc { lo: *l2, hi: *h1 }.normalize()
                             } else {
-                                // Disjoint arcs: conservatively return Top to contain both arcs soundly.
-                                Wrapped::Top
+                                // There are two covers, each filling one of the gaps.
+                                // Choose the smaller one, with an unsigned-start tie-break.
+                                let n1 = h2.wrapping_sub(*l1) as $uty;
+                                let n2 = h1.wrapping_sub(*l2) as $uty;
+                                if n1 < n2 || (n1 == n2 && (*l1 as $uty) <= (*l2 as $uty)) {
+                                    Wrapped::Arc { lo: *l1, hi: *h2 }.normalize()
+                                } else {
+                                    Wrapped::Arc { lo: *l2, hi: *h1 }.normalize()
+                                }
                             }
                         }
                     }
@@ -1712,13 +1725,13 @@ macro_rules! impl_wrapped_domain {
 }
 
 // Generate implementations for all requested primitive integer types
-impl_wrapped_domain!(u8);
-impl_wrapped_domain!(u16);
-impl_wrapped_domain!(u32);
-impl_wrapped_domain!(u64);
-impl_wrapped_domain!(u128);
-impl_wrapped_domain!(i8);
-impl_wrapped_domain!(i16);
-impl_wrapped_domain!(i32);
-impl_wrapped_domain!(i64);
-impl_wrapped_domain!(i128);
+impl_wrapped_domain!(u8, u8);
+impl_wrapped_domain!(u16, u16);
+impl_wrapped_domain!(u32, u32);
+impl_wrapped_domain!(u64, u64);
+impl_wrapped_domain!(u128, u128);
+impl_wrapped_domain!(i8, u8);
+impl_wrapped_domain!(i16, u16);
+impl_wrapped_domain!(i32, u32);
+impl_wrapped_domain!(i64, u64);
+impl_wrapped_domain!(i128, u128);

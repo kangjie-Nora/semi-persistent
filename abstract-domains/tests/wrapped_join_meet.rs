@@ -40,8 +40,42 @@ fn sampled_endpoint_pairs_exhaustive_u8_values() {
             let j = a.join(b);
             let m = a.meet(b);
             assert!(j == a.join(b));
+            assert!(j == b.join(a));
+            assert!(m == b.meet(a));
             assert!(m == a.meet(b));
             let expected_meet = sa.intersection(sb);
+            // An independent set oracle finds the longest empty circular gap.
+            // Its complement is a minimum-cardinality covering arc.
+            let best_size = |present: &dyn Fn(u8) -> bool| -> usize {
+                let count = (0..=255u8).filter(|&x| present(x)).count();
+                if count == 0 {
+                    return 0;
+                }
+                let mut gap = 0;
+                let mut longest = 0;
+                for i in 0..512 {
+                    if present(i as u8) {
+                        gap = 0;
+                    } else {
+                        gap += 1;
+                        longest = longest.max(gap);
+                    }
+                }
+                256 - longest
+            };
+            assert_eq!(
+                (0..=255u8).filter(|&x| j.contains(x)).count(),
+                best_size(&|x| sa.contains(x as u32) || sb.contains(x as u32))
+            );
+            assert_eq!(
+                (0..=255u8)
+                    .filter(|&x| match m {
+                        AbstractValue::Bot => false,
+                        AbstractValue::NonBot(w) => w.contains(x),
+                    })
+                    .count(),
+                best_size(&|x| expected_meet.contains(x as u32))
+            );
             assert_eq!(
                 matches!(m, AbstractValue::Bot),
                 expected_meet.cardinality() == 0
@@ -73,7 +107,7 @@ fn split_meet_preserves_both_components() {
         assert!(matches!(r, AbstractValue::NonBot(w) if w.contains(x)));
     }
     assert!(r == AbstractValue::NonBot(a));
-    assert!(b.meet(&a) == AbstractValue::NonBot(b));
+    assert!(b.meet(&a) == AbstractValue::NonBot(a));
 }
 
 macro_rules! boundary {
@@ -94,6 +128,7 @@ macro_rules! boundary {
                 assert!(j==j.normalize());
                 if let AbstractValue::NonBot(w)=m {assert!(w==w.normalize());}
                 assert!(j==a.join(b));assert!(m==a.meet(b));
+                assert!(j==b.join(a));assert!(m==b.meet(a));
                 let mut xs=p.to_vec();
                 for w in [*a,*b] {if let Wrapped::Arc{lo,hi}=w {
                     xs.extend([lo,hi,lo.wrapping_sub(1),lo.wrapping_add(1),hi.wrapping_sub(1),hi.wrapping_add(1)]);
@@ -116,3 +151,19 @@ boundary!(u64_boundaries, u64, u64);
 boundary!(i64_boundaries, i64, u64);
 boundary!(u128_boundaries, u128, u128);
 boundary!(i128_boundaries, i128, u128);
+
+#[test]
+fn equal_size_candidates_use_unsigned_start_tie_break() {
+    let a = Wrapped::<u8>::Arc { lo: 0, hi: 0 };
+    let b = Wrapped::<u8>::Arc { lo: 128, hi: 128 };
+    assert!(a.join(&b) == Wrapped::Arc { lo: 0, hi: 128 });
+    assert!(b.join(&a) == a.join(&b));
+    let c = Wrapped::<u8>::Arc { lo: 0, hi: 128 };
+    let d = Wrapped::<u8>::Arc { lo: 128, hi: 0 };
+    assert!(c.meet(&d) == AbstractValue::NonBot(c));
+    assert!(d.meet(&c) == c.meet(&d));
+    let cs = Wrapped::<i8>::Arc { lo: 0, hi: -128 };
+    let ds = Wrapped::<i8>::Arc { lo: -128, hi: 0 };
+    assert!(cs.meet(&ds) == AbstractValue::NonBot(cs));
+    assert!(ds.meet(&cs) == cs.meet(&ds));
+}

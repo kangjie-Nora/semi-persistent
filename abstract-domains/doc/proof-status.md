@@ -94,11 +94,13 @@ consistency. Wrapped join/meet coverage is listed below; arithmetic and conversi
 
 Universal containment postconditions now verify for Wrapped::join and
 Wrapped::meet across all ten primitive integer types. This does not establish
-optimal precision or conventional lattice laws. Split meet returns normalized
-left operand, so it is order-dependent; disjoint join returns Top.
+optimal precision or conventional lattice laws. Split meet selects the smaller
+operand cover; disjoint join selects the smaller of the two connecting arcs.
+Ties use the unsigned start bits. Precision and commutativity are runtime-tested,
+not additional universal Verus theorems.
 
-13 new production tests cover the known unsound join regression, split meet,
+14 new production tests cover the known unsound join regression, split meet,
 66,049 sampled-endpoint u8 input pairs with every concrete u8 value, and
-signed/unsigned boundary witnesses. Full crate: 71 tests pass, one ignored
+signed/unsigned boundary witnesses. Full crate: 72 tests pass, one ignored
 doctest. Production generic lifted AbstractValue operations and Sign are not
 part of this addition. No new admit/assume calls or dependencies were added.

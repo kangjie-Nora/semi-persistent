@@ -1,7 +1,7 @@
 # Wrapped join/meet: second-stage work
 
 This draft starts from the first-stage representation and oracle integration at
-3750fd6. It records planned work, not completed operations or approved interfaces.
+3750fd6. It records the implemented operations, validation, and remaining integration work.
 Development uses `wrapped-join-meet`; `kangjie` remains the first-stage review
 branch. Initially target the draft PR at `kangjie` so its diff contains only the
 second-stage work. Incorporate first-stage review fixes as needed and rebase or
@@ -56,23 +56,45 @@ its counterpart's endpoints are included. Equal endpoints are compared directly
 rather than relying on derived PartialEq in proof reasoning. All returned
 nonempty values are normalized.
 
-Both methods now prove universal containment for all ten primitive types.
-Meet's split case returns normalized self: sound and deterministic for ordered
-inputs, but potentially imprecise, not commutative, and not guaranteed to refine
-both operands. Disjoint join conservatively returns Top. These precision choices
-need review; no optimality or ordinary lattice-law guarantee is claimed.
+Both methods prove universal containment for all ten primitive types.
 
-Validation: 13 new join/meet tests. One samples all ordered pairs from Top and
-256 endpoint combinations (16 chosen u8 endpoints), checking all 256 concrete
-values per pair. It also checks Bot exactly when the concrete intersection is
-empty for those samples. This is 66,049 input pairs, not all possible u8 arcs.
-Other tests preserve the failing join witness, split meet witness, and boundary
-coverage for ten signed/unsigned types using modular-distance references.
+## Precision policy (revised)
 
-Full crate: 71 tests pass, one ignored doctest. Verus: 1036 verified, 0 errors.
-The original failure log and final logs are retained in the workspace evidence.
+Follow the biased over-join and over-meet design in Gange et al.,
+*Interval Analysis and Machine Arithmetic*, sections 3.2–3.3 / Figure 4:
+https://jorgenavas.github.io/papers/ACM-TOPLAS-wrapped.pdf
+
+- Split intersection: both original arcs cover the two exact components. Choose
+  the smaller arc, rather than always returning the left operand.
+- Disjoint union: consider Arc(l1,h2) and Arc(l2,h1). Choose the smaller cover,
+  rather than always returning Top.
+- Compare unsigned modular endpoint distances (cardinality minus one). This
+  avoids overflow for a full 128-bit circle. Signed types use the corresponding
+  unsigned type for the comparison, preserving bit-pattern semantics.
+- Break size ties by the numerically smaller unsigned start bits. This makes the
+  choice independent of argument order. Normalize results as before.
+
+For example, meet(Arc(250,6), Arc(4,252)) covers both [4,6] and [250,252]
+with Arc(250,6), regardless of argument order. Join([0,0],[128,128]) chooses
+Arc(0,128) over the equally sized Arc(128,0).
+
+This is a minimum-cardinality covering-arc algorithm; it does not make Wrapped
+an ordinary lattice. Associativity and monotonicity must not be assumed, and
+an approximate meet need not be contained in both operands. Universal Verus
+contracts prove containment only, not optimality or commutativity.
+
+Validation: 14 new join/meet tests. The independent finite-set oracle checks
+66,049 ordered pairs from Top and 256 endpoint combinations (16 chosen u8
+endpoints), at all 256 concrete values per pair. It additionally compares result
+cardinality with 256 minus the longest uncovered circular gap in the exact
+union/intersection, handles empty intersections, and checks argument-order
+independence. This is NOT exhaustive over all u8 arcs. Boundary checks across
+all ten types check symmetry as well; dedicated signed/unsigned tie witnesses
+check the unsigned tie-break. These finite precision checks are not universal
+optimality proofs.
+
+Full crate: 72 tests pass, one ignored doctest. Verus: 1036 verified, 0 errors.
 No Sign implementation or generic production lifted join/meet is added.
-
-Remaining coordination: confirm split-meet precision/ordering requirements and
-ownership of the generic AbstractValue lifted operations. Do not report these
-as complete or treat fixed-u8 tests as exhaustive four-bit operation validation.
+Generic AbstractValue lifted-operation ownership and final sponsor review remain
+separate integration work; the previous left-biased/Top precision fallbacks
+are no longer pending decisions.
