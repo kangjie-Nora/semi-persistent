@@ -6,7 +6,7 @@ Last refreshed: 2026-09-23.
 
 ```text
 cargo verus verify
-1016 verified, 0 errors
+1024 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -88,3 +88,21 @@ one-for-one. Canonicality and idempotence are tested, not separate formal contra
 Raw Arc construction can be noncanonical until normalize is called. Test-only
 wrapper lifting does not establish a generic production lifted API or product
 consistency. Join/meet, arithmetic and conversions remain future work.
+
+
+## Sign representation and exact set operations
+
+`sign::Sign` has seven nonempty states; `AbstractValue<Sign>::Bot` is the only
+empty representation. Sign is independent of machine width: mathematical
+membership uses Verus int, and executable membership accepts i128 (all smaller
+signed primitive widths convert losslessly).
+
+Sign and specialized AbstractValue<Sign> join/meet prove exact union/intersection
+membership for all mathematical integers. Both contains methods prove equivalence
+to has; from_value proves containment of its input; Clone proves equality.
+Eight new production tests check all eight states, exact operations for all i8
+values, five signed-width boundaries, and lattice laws over all state triples.
+The lattice-law checks are tests, not additional machine-checked theorem functions.
+Full branch: 66 tests passed, one ignored doctest; 1024 crate obligations verified.
+Arithmetic, Sign–Interval reduction and e-graph integration are not implemented.
+See [Sign validation](testing/sign-domain.md) for the interface and proof scope.
