@@ -1,12 +1,12 @@
 # Abstract Domains Proof Status
 
-Last refreshed: 2026-09-23.
+Last refreshed: 2026-09-26.
 
 ## Current result
 
 ```text
 cargo verus verify
-1016 verified, 0 errors
+1077 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -88,3 +88,25 @@ one-for-one. Canonicality and idempotence are tested, not separate formal contra
 Raw Arc construction can be noncanonical until normalize is called. Test-only
 wrapper lifting does not establish a generic production lifted API or product
 consistency. Join/meet, arithmetic and conversions remain future work.
+
+
+## Signed-width Sign core
+
+`sign::Sign<T>` supports i8/i16/i32/i64/i128 with seven nonempty states.
+Top carries PhantomData<T>; AbstractValue<Sign<T>>::Bot is the only empty value.
+A nonemptiness proof supplies a concrete -1/0/1 witness for every inner state.
+Contains matches signed-width membership, constructors are sound, and Clone
+preserves equality. Inner and outer refines prove equivalence to concrete inclusion.
+
+Inner/outer join and meet prove exact union/intersection membership. Outer runtime
+results also equal the union/intersection specification functions. Lattice proofs
+cover commutativity, associativity, idempotence, absorption, Bot/Top identities,
+upper/lower-bound properties, order laws and set-operation monotonicity at all five
+widths. These are formal theorems, with additional runtime regression coverage.
+
+Eleven Sign tests cover all eight states, every i8 value, five-width boundaries
+and all state triples for the supported laws. Full crate: 69 tests passed, one
+ignored doctest; 1077 crate obligations verified, zero errors. Fixed-width abstract
+neg/add/sub are deferred; concrete wrap-boundary tests do not validate an abstract
+arithmetic implementation. Mathematical-integer arithmetic is not in this core.
+See [Sign validation](testing/sign-domain.md) for interface details and scope.
