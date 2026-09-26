@@ -1,77 +1,61 @@
-# Sign representation and exact set operations
+# Signed-width Sign domain
 
-## Representation and interface
+## Representation and semantics
 
-`sign::Sign` contains seven nonempty states: Neg, Zero, Pos, NonPos, NonNeg,
-NonZero, Top. `domains::AbstractValue<Sign>` adds the only empty state, Bot.
-Sign is independent of machine width. The mathematical predicate `has(x: int)`
-describes integer signs; `contains(x: i128)` checks it at runtime. All signed
-primitive widths embed losslessly in i128 (`x as i128`). The `_math` arithmetic transfers use unbounded mathematical integers, without
-overflow. They must not be bound to wrapping machine-integer operators.
+`Sign<T>` supports i8, i16, i32, i64 and i128. Membership takes a concrete
+value of that same signed type, interpreted in two's complement. The seven
+nonempty states are Zero, Pos, Neg, NonNeg, NonPos, NonZero and Top.
+`AbstractValue<Sign<T>>::Bot` is the only empty state. Top holds PhantomData<T>;
+there is no additional marker variant. A verified nonemptiness lemma provides
+one of -1, 0 or 1 as a concrete witness for every inner state. Consequently no
+separate well-formedness precondition is required to exclude invalid states.
 
-`from_value` returns Neg, Zero or Pos; it abstracts the sign, not the magnitude.
-Nonempty Sign join returns Sign; meet returns AbstractValue<Sign>. Specialized
-lifted join/meet/contains on AbstractValue<Sign> support empty inputs. This is
-not a generic Domain trait or an implementation for all AbstractValue<D>.
+`from_value` returns the sign of a concrete value; `top` represents every value
+of the selected type. `contains` agrees exactly with `has`. `refines(a,b)` is
+true exactly when every value represented by a is also represented by b.
+Sign::join returns a nonempty Sign; Sign::meet can return Bot. Specialized outer
+operations on AbstractValue<Sign<T>> support Bot inputs directly.
 
 ## Verified contracts
 
-- contains is exactly equivalent to mathematical has for its concrete argument.
-- join has(x) iff either input has(x), for every mathematical integer x.
-- meet has(x) iff both inputs have(x), for every mathematical integer x.
-- Both lifted operations have the same exact set contracts, including Bot.
-- from_value contains its source value; Clone preserves equality.
+At each supported width:
 
-These exactness proofs imply no missing or extra values for set union and
-intersection. This is stronger than containment alone and differs from Wrapped,
-where a single arc cannot always represent the exact set operation.
+- contains is equivalent to has; Clone preserves equality; constructors are sound.
+- refines is equivalent to universal concrete-set inclusion, including outer Bot.
+- join and meet have exact union/intersection contracts, not only containment.
+- Outer executable join/meet equal their specification functions union/intersection.
+- lattice_laws proves commutativity, associativity, idempotence, absorption,
+  Bot/Top identities, upper/lower-bound properties, reflexivity, antisymmetry,
+  transitivity, and union/intersection monotonicity under subset.
 
-## Mathematical arithmetic
+The executable/specification correspondence connects these laws to the runtime
+operations. No arithmetic-transfer or arithmetic-monotonicity theorem is claimed.
 
-`neg_math`, `add_math`, `sub_math`, `mul_math`, `min_math`, and `max_math`
-implement the sign rules for mathematical integers, following the extended sign
-domain in section 4.2 of Miné's *Tutorial on Static Inference of Numeric
-Invariants by Abstract Interpretation*. Their contracts quantify over Verus int,
-not i128 machine arithmetic. For example, Pos + Pos returns Pos even when
-concrete operands would overflow a machine type. The transfer implementation
-operates on sign states only and never performs that machine addition.
+## Tests
 
-Each operation proves containment of every corresponding mathematical result.
-Subtraction composes negation and addition. Multiplication sign lemmas use
-nonlinear arithmetic proofs. Specialized AbstractValue<Sign> operations propagate
-Bot when an input is empty. Arithmetic contracts promise containment, not exact
-sets of integer magnitudes or formally optimal precision.
+The independent oracle represents each state as a subset of {negative, zero,
+positive}. Tests check every pair of eight states over all i8 values for membership,
+refinement, exact union/intersection and canonical Bot results. Every supported
+width also tests MIN/MAX, adjacent values, -1/0/1, constructors, cloning and all
+512 triples for lattice/order properties.
 
-Division is not implemented: it requires an explicit quotient rounding convention
-and a result/alarm policy for possible zero divisors. Sign–Interval reduction and
-machine-wrapping transfers are separate operations.
-
-## Tests and evidence
-
-Eight representation/set-operation tests call the production implementation. An independent three-category
-set model checks all 64 pairs of the eight states for every i8 value, plus
-boundary values for i8/i16/i32/i64/i128. Tests require canonical Bot exactly when
-the intersection is empty. All 512 triples are checked for associativity and
-distributivity; tests also check commutativity, idempotence, absorption, Bot/Top
-identities, construction and cloning. Lattice laws are runtime checks, not
-separate Verus proof functions.
-
-Run the production tests with:
+Boundary regressions interpret MAX.wrapping_add(1), MIN.wrapping_sub(1), and
+MIN.wrapping_neg() using native signed types. These test concrete interpretation;
+they do not constitute abstract neg/add/sub implementations.
 
 ```sh
 cargo test -p semi-persistent-abstract-domains --test sign
 ```
 
-Run `cargo verus verify` from `abstract-domains` for the exact set contracts.
-The current verification inventory is recorded in `doc/proof-status.md`.
+Run `cargo verus verify` from `abstract-domains` for the proofs. The complete
+verification inventory is recorded in `doc/proof-status.md`.
 
-Three arithmetic tests additionally enumerate every i8 operand pair for every
-abstract input-state pair, promote inputs to i128, and check concrete add/sub/mul/
-min/max results. Every returned sign category must have a finite concrete witness.
-Boundary tests use checked i128 arithmetic; overflowing concrete calculations are
-skipped, not treated as passing examples. Universal mathematical containment is
-covered by Verus, including results outside i128. A regression distinguishes the
-mathematical positive sum 127+1 from its negative i8 wrapping result.
+## Deferred arithmetic
 
-Division, Sign–Interval reduction, unsigned semantics and e-graph integration are
-not implemented by this module.
+Future neg/add/sub transfers use fixed-width two's-complement wrapping semantics.
+When signs alone cannot establish a narrower sound result, a documented Top
+result is permitted and still needs a containment proof. In particular, Pos+Pos
+cannot generally return Pos, and negating MIN leaves a negative value.
+Mathematical-integer `_math` transfers are not part of this interface.
+Multiplication is stretch scope. Division, min/max transfers, product reduction
+and e-graph integration are not provided by this module.

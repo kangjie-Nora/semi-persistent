@@ -1,12 +1,12 @@
 # Abstract Domains Proof Status
 
-Last refreshed: 2026-09-23.
+Last refreshed: 2026-09-26.
 
 ## Current result
 
 ```text
 cargo verus verify
-1041 verified, 0 errors
+1077 verified, 0 errors
 ```
 
 The project source contains no executable `admit()` or `assume()` calls. CI
@@ -90,24 +90,23 @@ wrapper lifting does not establish a generic production lifted API or product
 consistency. Join/meet, arithmetic and conversions remain future work.
 
 
-## Sign representation and exact set operations
+## Signed-width Sign core
 
-`sign::Sign` has seven nonempty states; `AbstractValue<Sign>::Bot` is the only
-empty representation. Sign is independent of machine width: mathematical
-membership uses Verus int, and executable membership accepts i128 (all smaller
-signed primitive widths convert losslessly).
+`sign::Sign<T>` supports i8/i16/i32/i64/i128 with seven nonempty states.
+Top carries PhantomData<T>; AbstractValue<Sign<T>>::Bot is the only empty value.
+A nonemptiness proof supplies a concrete -1/0/1 witness for every inner state.
+Contains matches signed-width membership, constructors are sound, and Clone
+preserves equality. Inner and outer refines prove equivalence to concrete inclusion.
 
-Sign and specialized AbstractValue<Sign> join/meet prove exact union/intersection
-membership for all mathematical integers. Both contains methods prove equivalence
-to has; from_value proves containment of its input; Clone proves equality.
-Eight new production tests check all eight states, exact operations for all i8
-values, five signed-width boundaries, and lattice laws over all state triples.
-The lattice-law checks are tests, not additional machine-checked theorem functions.
-Full crate: 69 tests passed, one ignored doctest; 1041 crate obligations verified.
-Mathematical negation, addition, subtraction, multiplication, min and max prove
-universal containment over Verus int, both on Sign and AbstractValue<Sign>.
-Three additional arithmetic tests enumerate i8 pairs using i128 concrete results,
-check sign-category witnesses and checked i128 boundaries, and distinguish these
-transfers from wrapping arithmetic. Division, Sign–Interval reduction and e-graph
-integration are not implemented.
-See [Sign validation](testing/sign-domain.md) for the interface and proof scope.
+Inner/outer join and meet prove exact union/intersection membership. Outer runtime
+results also equal the union/intersection specification functions. Lattice proofs
+cover commutativity, associativity, idempotence, absorption, Bot/Top identities,
+upper/lower-bound properties, order laws and set-operation monotonicity at all five
+widths. These are formal theorems, with additional runtime regression coverage.
+
+Eleven Sign tests cover all eight states, every i8 value, five-width boundaries
+and all state triples for the supported laws. Full crate: 69 tests passed, one
+ignored doctest; 1077 crate obligations verified, zero errors. Fixed-width abstract
+neg/add/sub are deferred; concrete wrap-boundary tests do not validate an abstract
+arithmetic implementation. Mathematical-integer arithmetic is not in this core.
+See [Sign validation](testing/sign-domain.md) for interface details and scope.
