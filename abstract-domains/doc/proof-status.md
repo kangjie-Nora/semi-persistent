@@ -80,10 +80,11 @@ semantic is_top and modular-distance membership are verified. All Domain
 operations prove their shared gamma soundness contracts. Meet also proves Bot iff
 its exact intersection is empty. Join/meet precision and symmetry are tested;
 no conventional lattice-law claim is made. Widen uses a cardinality-doubling
-threshold with Top fallback; its formal contract is soundness only.
+threshold with Top fallback; a verified postcondition additionally guarantees
+that the result is unchanged, Top, or at least twice the previous cardinality.
 
-The crate has 62 passing tests (32 mirrors, 3 shared-interface tests, 13 oracle
-self-tests, 7 Wrapped core tests, 7 Wrapped arithmetic tests), with one ignored doctest. u8 membership
+The crate has 68 passing tests (32 mirrors, 3 shared-interface tests, 13 oracle
+self-tests, 7 Wrapped core tests, 7 Wrapped arithmetic tests, 6 division/remainder tests), with one ignored doctest. u8 membership
 and constructor canonicality are exhaustive; binary operations sample endpoints
 and enumerate all concrete values for those pairs. Four-width boundaries and
 actual BotOr lifting are covered. See testing/wrapped-oracle.md for details.
@@ -91,5 +92,11 @@ Arith<Signed<W>> and Arith<Unsigned<W>> implement modular add/sub/neg with
 universal gamma containment proofs. Exact results are checked by exhaustive u8
 arc negation, exhaustive singleton pairs and sampled arc pairs with exhaustive
 concrete operands. General exactness is not a separate formal postcondition.
-DivRem, signed pole splitting and later bitwise/shift/cast/comparison transfers
-are not implemented in this port. No 128-bit Word support is claimed.
+DivRem for both signed and unsigned semantics is implemented with splitting at
+zero and the signed half-circle. Exact partition membership, coverage of all
+pieces, magnitude conversion, signed quotient/remainder correspondence and
+universal result containment are verified. The zero classifier proves exact
+Never/Always cases, with Bot iff Always. The signed MIN/-1 operation wraps.
+Quotient/remainder covers can overapproximate; no optimal-precision theorem is
+claimed. Bitwise/shift/cast/comparison transfer traits remain future shared
+interface work, as listed in domain-traits.md. No 128-bit Word support is claimed.
