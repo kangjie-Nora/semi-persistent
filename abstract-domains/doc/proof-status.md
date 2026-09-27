@@ -69,3 +69,23 @@ subtraction, multiplication, division, shifts, joins, meets, and negation.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
+
+
+## Wrapped Domain port
+
+`wrapped::Wrapped<W: Word>` uses the shared Domain and BotOr interface, one
+instance per u8/u16/u32/u64 width. Private construction establishes wf; full-circle
+arcs become Top. Nonemptiness, canonical representation, executable constant,
+semantic is_top and modular-distance membership are verified. All Domain
+operations prove their shared gamma soundness contracts. Meet also proves Bot iff
+its exact intersection is empty. Join/meet precision and symmetry are tested;
+no conventional lattice-law claim is made. Widen uses a cardinality-doubling
+threshold with Top fallback; its formal contract is soundness only.
+
+The crate has 55 passing tests (32 mirrors, 3 shared-interface tests, 13 oracle
+self-tests, 7 Wrapped production tests), with one ignored doctest. u8 membership
+and constructor canonicality are exhaustive; binary operations sample endpoints
+and enumerate all concrete values for those pairs. Four-width boundaries and
+actual BotOr lifting are covered. See testing/wrapped-oracle.md for details.
+Arith/DivRem, signed pole splitting and later bitwise/shift/cast/comparison
+transfers are not implemented in this port. No 128-bit Word support is claimed.
