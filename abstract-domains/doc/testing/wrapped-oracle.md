@@ -31,8 +31,9 @@ Meet additionally proves Bot if and only if the exact intersection is empty.
 Widen leaves contained inputs unchanged. Otherwise it accepts the joined arc only
 when cardinality at least doubles, and jumps to Top for smaller growth. Thus an
 unstable step increases cardinality by at least a factor of two, capped at 2^N;
-the measure is the number of remaining doublings. The shared formal widening
-contract proves soundness; the growth policy is additionally runtime-tested.
+the measure is the number of remaining doublings. Besides shared soundness,
+the implementation formally proves that each result is unchanged, Top, or at
+least twice the previous cardinality. Growth is also runtime-tested.
 
 ## Modular arithmetic
 
@@ -50,6 +51,28 @@ all u8 singleton pairs, 4,225 sampled abstract pairs with all concrete operand
 pairs, and boundaries at all four widths. Expected sets use Rust wrapping
 operations over independently enumerated input sets. They check exact sets,
 not only containment. These finite tests are not a universal exactness proof.
+
+## Division and remainder
+
+`DivRem<Unsigned<W>>` and `DivRem<Signed<W>>` classify the divisor as Never,
+Maybe or Always zero. Only an all-zero divisor produces Bot. `contains_zero`
+is exact. Zero divisors are excluded from quotient/remainder computation and
+reported through the flag.
+
+Inputs split into up to four non-wrapping pieces at zero and the signed
+half-circle. Both the membership of each piece and coverage of the original
+input are proved. Unsigned pieces use the existing verified linear Interval
+transfers. Signed pieces convert to magnitude intervals, compute the unsigned
+operation, and restore the sign: quotient uses operand-sign XOR, remainder uses
+the dividend sign. MIN/-1 follows the shared wrapping semantics. The final
+result is a deterministic join of all piece-pair results.
+
+The reuse of Interval remainder bounds and the final single-arc cover can add
+spurious values. Remainder is not claimed exact even for every singleton pair.
+Six tests check all u8 singleton operand pairs, 4,225 sampled abstract pairs
+with exhaustive concrete operands, exact zero flags, and boundaries at all four
+widths. Expected signed values use Rust wrapping_div/wrapping_rem; division by
+zero is checked separately. These tests check containment for general results.
 
 ## Tests and limits
 
@@ -71,6 +94,6 @@ cargo verus verify --manifest-path abstract-domains/Cargo.toml
 ```
 
 Use the versions pinned by the repository. Proof totals and scope are recorded
-in `doc/proof-status.md`. DivRem transfers, pole splitting, bitwise operations,
-shifts, casts and comparisons are not implemented by this core port. The Domain
-port does not claim the full Wrapped arithmetic roadmap is complete.
+in `doc/proof-status.md`. The implemented shared interfaces are Domain, Arith
+and DivRem. Bitwise, Shift, Cast and Compare are listed as future shared traits
+in domain-traits.md; this port does not introduce competing interfaces for them.
