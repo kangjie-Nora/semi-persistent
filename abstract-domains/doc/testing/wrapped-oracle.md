@@ -34,6 +34,23 @@ unstable step increases cardinality by at least a factor of two, capped at 2^N;
 the measure is the number of remaining doublings. The shared formal widening
 contract proves soundness; the growth policy is additionally runtime-tested.
 
+## Modular arithmetic
+
+Both `Arith<Unsigned<W>>` and `Arith<Signed<W>>` provide add, sub and neg.
+Addition sums clockwise spans: if the combined span cannot fit a word, the
+result is Top; otherwise the endpoints are added modulo the word modulus and
+the constructor canonicalizes a full-circle result. Negation reverses and
+negates the endpoints. Subtraction adds the negated right operand. The
+implementation uses checked native arithmetic and never overflows a host integer.
+Signed and unsigned operations are proved to agree on the resulting bit patterns.
+All enabled arithmetic transfers prove universal containment against gamma.
+
+Seven arithmetic tests exercise actual transfers: negation over every u8 arc,
+all u8 singleton pairs, 4,225 sampled abstract pairs with all concrete operand
+pairs, and boundaries at all four widths. Expected sets use Rust wrapping
+operations over independently enumerated input sets. They check exact sets,
+not only containment. These finite tests are not a universal exactness proof.
+
 ## Tests and limits
 
 - 13 independent oracle self-tests cover small model widths, reference operations
@@ -54,6 +71,6 @@ cargo verus verify --manifest-path abstract-domains/Cargo.toml
 ```
 
 Use the versions pinned by the repository. Proof totals and scope are recorded
-in `doc/proof-status.md`. Arith/DivRem transfers, pole splitting, bitwise operations,
+in `doc/proof-status.md`. DivRem transfers, pole splitting, bitwise operations,
 shifts, casts and comparisons are not implemented by this core port. The Domain
 port does not claim the full Wrapped arithmetic roadmap is complete.
