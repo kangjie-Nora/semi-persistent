@@ -3,7 +3,9 @@
 //! Canonical, signedness-agnostic wrapped intervals over native words.
 #![allow(unused_imports, unused_variables)]
 use crate::lattice::{BotOr, Domain};
-use crate::word::Word;
+use crate::semantics::{Semantics, Signed, Unsigned};
+use crate::transfer::Arith;
+use crate::word::*;
 use vstd::arithmetic::div_mod::*;
 use vstd::prelude::*;
 
@@ -260,4 +262,138 @@ impl<W: Word> Domain for Wrapped<W> {
         }
     }
 }
+// Reduce a sum/difference of two words without introducing native overflow.
+spec fn wrap(n: int, m: int) -> int {
+    if n < 0 { n + m } else if n >= m { n - m } else { n }
+}
+proof fn wrap_view<W: Word>(n: int)
+    requires -(W::modulus() as int) <= n < 2 * W::modulus(),
+    ensures W::from_int(n).view() == wrap(n, W::modulus() as int),
+{
+    W::lemma_modulus(); W::lemma_from_int(n);
+    let m = W::modulus() as int;
+    let q = if n < 0 {-1} else if n >= m {1} else {0};
+    lemma_fundamental_div_mod_converse_mod(n, m, q, wrap(n,m));
+}
+fn word_neg<W: Word>(x: W) -> (r: W)
+    ensures r.view() == wrap(-(x.view() as int), W::modulus() as int),
+{
+    proof { x.lemma_view_bounded(); W::lemma_modulus(); }
+    if x.eq(W::zero()) {W::zero()} else {x.neg_nonzero()}
+}
+fn word_add<W: Word>(x: W, y: W) -> (r: W)
+    ensures r.view() == wrap(x.view() as int + y.view(), W::modulus() as int),
+{
+    proof {x.lemma_view_bounded(); y.lemma_view_bounded(); W::lemma_modulus();}
+    match x.checked_add(y) {
+        Some(r) => {proof {r.lemma_view_bounded();} r},
+        None => {
+            let d=y.neg_nonzero();
+            match x.checked_sub(d) {Some(r)=>r,None=>{assert(false);W::zero()}}
+        }
+    }
+}
+
+impl<W: Word> Arith<Unsigned<W>> for Wrapped<W> {
+    fn add(&self, o: &Self) -> (r: Self) {
+        match (self.repr,o.repr) {
+            (Repr::Arc{lo:a,hi:b},Repr::Arc{lo:c,hi:d}) => {
+                let da=dist(a,b); let db=dist(c,d);
+                match da.checked_add(db) {
+                    None => Self::top(),
+                    Some(span) => {
+                        proof {span.lemma_view_bounded();}
+                        let lo=word_add(a,c); let hi=word_add(b,d);
+                        let r=Self::new(lo,hi);
+                        proof {
+                            a.lemma_view_bounded();b.lemma_view_bounded();c.lemma_view_bounded();d.lemma_view_bounded();
+                            assert(distance(lo,hi)==distance(a,b)+distance(c,d));
+                            assert forall|x:W,y:W| self.gamma(x)&&o.gamma(y) implies #[trigger] r.gamma(Unsigned::<W>::add(x,y)) by {
+                                x.lemma_view_bounded();y.lemma_view_bounded();
+                                wrap_view::<W>(x.view() as int+y.view());
+                                assert(distance(lo,Unsigned::<W>::add(x,y)) == distance(a,x)+distance(c,y));
+                            }
+                        }
+                        r
+                    }
+                }
+            },
+            _ => Self::top(),
+        }
+    }
+    fn neg(&self) -> (r: Self) {
+        match self.repr {
+            Repr::Top => Self::top(),
+            Repr::Arc{lo,hi} => {
+                let a=word_neg(hi); let b=word_neg(lo);
+                let r=Self::new(a,b);
+                proof {
+                    lo.lemma_view_bounded(); hi.lemma_view_bounded();
+                    assert forall|x:W| self.gamma(x) implies #[trigger] r.gamma(Unsigned::<W>::neg(x)) by {
+                        x.lemma_view_bounded();wrap_view::<W>(-(x.view() as int));
+                    }
+                }
+                r
+            }
+        }
+    }
+    fn sub(&self,o:&Self)->(r:Self) {
+        let n=<Self as Arith<Unsigned<W>>>::neg(o);
+        let r=<Self as Arith<Unsigned<W>>>::add(self,&n);
+        proof {
+            assert forall|x:W,y:W| self.gamma(x)&&o.gamma(y) implies #[trigger] r.gamma(Unsigned::<W>::sub(x,y)) by {
+                x.lemma_view_bounded();y.lemma_view_bounded();
+                wrap_view::<W>(-(y.view() as int));
+                let ny=Unsigned::<W>::neg(y);
+                ny.lemma_view_bounded();
+                wrap_view::<W>(x.view() as int+ny.view());
+                wrap_view::<W>(x.view() as int-y.view());
+                W::lemma_view_injective(Unsigned::<W>::add(x,ny),Unsigned::<W>::sub(x,y));
+                assert(n.gamma(ny));
+            }
+        }
+        r
+    }
+}
+
+proof fn signed_arithmetic<W: Word>(x:W,y:W)
+    ensures
+        Signed::<W>::add(x,y)==Unsigned::<W>::add(x,y),
+        Signed::<W>::sub(x,y)==Unsigned::<W>::sub(x,y),
+        Signed::<W>::neg(x)==Unsigned::<W>::neg(x),
+{
+    W::lemma_modulus();
+    let m=W::modulus() as int;
+    let a=x.view() as int;let b=y.view() as int;
+    W::lemma_from_int(a+b);W::lemma_from_int(a-b);W::lemma_from_int(-a);
+    W::lemma_from_int(signed_view(x)+signed_view(y));
+    W::lemma_from_int(signed_view(x)-signed_view(y));
+    W::lemma_from_int(-signed_view(x));
+    lemma_mod_sub_multiples_vanish(a+b,m);
+    lemma_mod_sub_multiples_vanish(a+b-m,m);
+    lemma_mod_sub_multiples_vanish(a-b,m);
+    lemma_mod_add_multiples_vanish(a-b,m);
+    lemma_mod_add_multiples_vanish(-a,m);
+    W::lemma_view_injective(Signed::<W>::add(x,y),Unsigned::<W>::add(x,y));
+    W::lemma_view_injective(Signed::<W>::sub(x,y),Unsigned::<W>::sub(x,y));
+    W::lemma_view_injective(Signed::<W>::neg(x),Unsigned::<W>::neg(x));
+}
+impl<W: Word> Arith<Signed<W>> for Wrapped<W> {
+    fn add(&self,o:&Self)->(r:Self) {
+        let r=<Self as Arith<Unsigned<W>>>::add(self,o);
+        proof { assert forall|x:W,y:W| self.gamma(x)&&o.gamma(y) implies #[trigger] r.gamma(Signed::<W>::add(x,y)) by {signed_arithmetic(x,y);} }
+        r
+    }
+    fn sub(&self,o:&Self)->(r:Self) {
+        let r=<Self as Arith<Unsigned<W>>>::sub(self,o);
+        proof { assert forall|x:W,y:W| self.gamma(x)&&o.gamma(y) implies #[trigger] r.gamma(Signed::<W>::sub(x,y)) by {signed_arithmetic(x,y);} }
+        r
+    }
+    fn neg(&self)->(r:Self) {
+        let r=<Self as Arith<Unsigned<W>>>::neg(self);
+        proof { assert forall|x:W| self.gamma(x) implies #[trigger] r.gamma(Signed::<W>::neg(x)) by {signed_arithmetic(x,x);} }
+        r
+    }
+}
+
 }
