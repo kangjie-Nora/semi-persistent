@@ -69,3 +69,21 @@ subtraction, multiplication, division, shifts, joins, meets, and negation.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
+
+## Sign Domain
+
+`sign::Sign<W: Word>` is a bottomless, width-generic machine domain for the
+seven nonempty sign sets: negative, zero, positive, nonpositive, nonnegative,
+nonzero and top. `lattice::BotOr<Sign<W>>::Bot` is the sole empty value.
+
+The domain implements the shared `Domain` interface for `u8`, `u16`, `u32`
+and `u64`. Membership uses the two's-complement signed interpretation of the
+word. The representation is canonical, `refines` is proved equivalent to
+concrete-set inclusion, and `join`, `meet`, and `widen` meet their universal
+gamma contracts. The finite sign lattice laws are also proved.
+
+The dedicated runtime suite has four tests: all 49 nonempty state pairs over
+every `u8` bit pattern; Bottom and Top behavior; the sign table for
+join/meet/widen; and MIN, zero, and maximum-positive boundaries at each
+supported width. Arithmetic transfers are deliberately not included in this
+Week 5 core PR; they are the bounded Week 6 work.
