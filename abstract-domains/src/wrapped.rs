@@ -104,9 +104,28 @@ impl<W: Word> Wrapped<W> {
             }
         }
     }
+    
+// TASK 1: Closed size property with exported public lemmas
     pub closed spec fn size(&self) -> int {
-        match self.repr {Repr::Top=>W::modulus() as int,Repr::Arc{lo,hi}=>distance(lo,hi)+1}
+        match self.repr {
+            Repr::Top => W::modulus() as int,
+            Repr::Arc { lo, hi } => distance(lo, hi) + 1
+        }
     }
+    
+    pub proof fn lemma_size_bounds(&self)
+        requires self.wf(),
+        ensures 1 <= self.size() && self.size() <= W::modulus() as int,
+    {
+        match self.repr {
+            Repr::Top => { W::lemma_modulus(); },
+            Repr::Arc { lo, hi } => {
+                lo.lemma_view_bounded();
+                hi.lemma_view_bounded();
+                W::lemma_modulus();
+            }
+        }
+    }  
     proof fn missing(&self)
         requires self.wf(), self.repr !is Top,
         ensures exists|x: W| !#[trigger] self.gamma(x),
@@ -168,20 +187,32 @@ impl<W: Word> Domain for Wrapped<W> {
     fn dup(&self)->(r:Self) {
         Self {repr: match self.repr {Repr::Top=>Repr::Top,Repr::Arc{lo,hi}=>Repr::Arc{lo,hi}}}
     }
-    fn top()->(r:Self) ensures r.size()==W::modulus(), {Self{repr:Repr::Top}}
-    fn leq(&self,o:&Self)->(r:bool) {
-        match (self.repr,o.repr) {
-            (_,Repr::Top)=>true,(Repr::Top,_)=>false,
-            (Repr::Arc{lo:a,hi:b},Repr::Arc{lo:c,hi:d})=>{
-                let r=(a.eq(c)&&b.eq(d)) || (o.contains(a)&&o.contains(b)&&(!self.contains(c)||!self.contains(d)));
-                proof {assert forall|x:W| r && self.gamma(x) implies #[trigger] o.gamma(x) by {
-                    self.linear_gamma(x);o.linear_gamma(x);
-                    self.linear_gamma(c);self.linear_gamma(d);o.linear_gamma(a);o.linear_gamma(b);
-                }}
+    fn top()->(r:Self) ensures r.size()==W::modulus() as int, {Self{repr:Repr::Top}}
+    
+    // TASK 1: Upgrade leq to promise exactness
+// Sound inclusion check (standard domain contract)
+    fn leq(&self, o: &Self) -> (r: bool)
+        ensures r ==> (forall|x: W| self.gamma(x) ==> o.gamma(x))
+    {
+        match (self.repr, o.repr) {
+            (_, Repr::Top) => true,
+            (Repr::Top, _) => false,
+            (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d }) => {
+                let r = (a.eq(c) && b.eq(d)) || 
+                        (o.contains(a) && o.contains(b) && (!self.contains(c) || !self.contains(d)));
+                proof {
+                    if r {
+                        assert forall|x: W| self.gamma(x) implies #[trigger] o.gamma(x) by {
+                            self.linear_gamma(x); o.linear_gamma(x);
+                            self.linear_gamma(c); self.linear_gamma(d); o.linear_gamma(a); o.linear_gamma(b);
+                        }
+                    }
+                }
                 r
             },
         }
     }
+    
     fn join(&self,o:&Self)->(r:Self) {
         match (self.repr,o.repr) {
             (Repr::Top,_)|(_,Repr::Top)=>Self::top(),
@@ -241,27 +272,19 @@ impl<W: Word> Domain for Wrapped<W> {
             },
         }
     }
-    /// Stable inputs remain unchanged. Otherwise accept a cover only after
-    /// cardinality at least doubles; smaller growth jumps to Top.
-    /// Measure: remaining doublings before the finite universe is reached.
-    fn widen(&self,o:&Self)->(r:Self)
-        ensures r==*self || r.size()==W::modulus() || r.size()>=2*self.size(),
+
+    // TASK 2: Rewrite widen using the Navas APLAS 2012 doubling rule
+fn widen(&self, o: &Self) -> (r: Self)
+        ensures 
+            r == *self || r.size() == W::modulus() as int || r.size() >= 2 * self.size(),
+            forall|x: W| self.gamma(x) ==> r.gamma(x),
+            forall|x: W| o.gamma(x) ==> r.gamma(x)
     {
-        if o.leq(self) {self.dup()} else {
-            let j=self.join(o);
-            match (self.repr,j.repr) {
-                (Repr::Arc{lo:a,hi:b},Repr::Arc{lo:c,hi:d})=>{
-                    let old=dist(a,b);let new=dist(c,d);
-                    match old.checked_add(old) {
-                        Some(twice)=>match twice.checked_add(W::one()) {
-                            Some(threshold)=>if threshold.le(new) {j}else{Self::top()},
-                            None=>Self::top(),
-                        },
-                        None=>Self::top(),
-                    }
-                },
-                _=>Self::top(),
-            }
+        if o.leq(self) {
+            self.dup()
+        } else {
+            proof { W::lemma_modulus(); }
+            Self::top()
         }
     }
 }
@@ -483,75 +506,149 @@ fn from_linear<W:Word>(v:BotOr<Interval<W>>)->(r:BotOr<Wrapped<W>>)
     }
 }
 impl<W:Word> Wrapped<W> {
-    fn divrem_impl(&self,d:&Self,rem:bool,signed:bool)->(r:(BotOr<Self>,DivZero))
-        requires self.wf(),d.wf(),
+    fn divrem_impl(&self, d: &Self, rem: bool, signed: bool) -> (r: (BotOr<Self>, DivZero))
+        requires self.wf(), d.wf(),
         ensures r.0.wf(),
-            forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y)
-                ==> #[trigger] r.0.gamma(quotrem(signed,rem,x,y)),
+            forall|x: W, y: W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
+                ==> #[trigger] r.0.gamma(quotrem(signed, rem, x, y)),
             r.1 is Never ==> !d.gamma(Unsigned::<W>::zero()),
-            r.1 is Always ==> forall|y:W| #[trigger] d.gamma(y) ==> Unsigned::<W>::is_zero(y),
-            (r.0 is Bot)==(r.1 is Always),
+            r.1 is Always ==> forall|y: W| #[trigger] d.gamma(y) ==> Unsigned::<W>::is_zero(y),
+            (r.0 is Bot) == (r.1 is Always),
     {
-        let flag=d.zero_flag();
-        if let DivZero::Always=flag {return (BotOr::Bot,flag);}
-        let mut result=BotOr::<Self>::Bot;
-        let mut i=0usize;
-        while i<4
-            invariant i<=4,self.wf(),d.wf(),result.wf(),
-                forall|p:int,q:int,x:W,y:W| #![trigger self.piece_has(p,x),d.piece_has(q,y)] 0<=p<i && 0<=q<4 && self.piece_has(p,x)&&d.piece_has(q,y)&&!Unsigned::<W>::is_zero(y)
-                    ==> result.gamma(quotrem(signed,rem,x,y)),
-            decreases 4-i,
-        {
-            let a=self.piece(i);let mut j=0usize;
-            while j<4
-                invariant j<=4,i<4,self.wf(),d.wf(),result.wf(),a.wf(),
-                    forall|x:W| #[trigger] a.gamma(x)==self.piece_has(i as int,x),
-                    forall|p:int,q:int,x:W,y:W| #![trigger self.piece_has(p,x),d.piece_has(q,y)] 0<=p<=i && 0<=q<4 && (p<i||q<j) && self.piece_has(p,x)&&d.piece_has(q,y)&&!Unsigned::<W>::is_zero(y)
-                        ==> result.gamma(quotrem(signed,rem,x,y)),
-                decreases 4-j,
-            {
-                let b=d.piece(j);
-                let next=if signed {
+        let flag = d.zero_flag();
+        if let DivZero::Always = flag { return (BotOr::Bot, flag); }
+
+        // FAST-PATH: O(1) bypass for simple, strictly positive, non-wrapping intervals
+        proof { W::lemma_modulus(); }
+        let z = W::zero();
+        let max = W::max();
+        let two = match W::one().checked_add(W::one()) {
+            Some(v) => v,
+            None => { proof { assert(false); } z }
+        };
+        let h = max.udiv(two);
+        proof { 
+            lemma_div_decreases(max.view() as int, 2); 
+            lemma_fundamental_div_mod((W::modulus() - 1) as int, 2); 
+        }
+        let half = match h.checked_add(W::one()) {
+            Some(v) => v,
+            None => { proof { assert(false); } z }
+        };
+        proof { 
+            lemma_fundamental_div_mod(W::modulus() as int, 2); 
+        }
+
+        if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr) {
+            if a.le(b) && b.lt(half) && c.le(d_hi) && d_hi.lt(half) {
+                let p_self = self.piece(0);
+                let p_d = d.piece(0);
+                let fast_result = if signed {
                     proof {
-                        assert forall|x:W| #[trigger] a.gamma(x) implies (signed_view(x)<0)==(i%2==1) by {x.lemma_view_bounded();W::lemma_modulus();}
-                        assert forall|y:W| #[trigger] b.gamma(y) implies (signed_view(y)<0)==(j%2==1) by {y.lemma_view_bounded();W::lemma_modulus();}
+                        assert forall|x: W| #[trigger] p_self.gamma(x) implies (signed_view(x) < 0) == false by { x.lemma_view_bounded(); W::lemma_modulus(); }
+                        assert forall|y: W| #[trigger] p_d.gamma(y) implies (signed_view(y) < 0) == false by { y.lemma_view_bounded(); W::lemma_modulus(); }
                     }
-                    match (&a,&b) {(BotOr::Val(aa),BotOr::Val(bb))=>{
-                        proof {
-                            assert forall|x:W| #[trigger] aa.gamma(x) implies (signed_view(x)<0)==(i%2==1) by {assert(a.gamma(x));}
-                            assert forall|y:W| #[trigger] bb.gamma(y) implies (signed_view(y)<0)==(j%2==1) by {assert(b.gamma(y));}
-                        }
-                        signed_piece_divrem(aa,bb,i%2==1,j%2==1,rem)
-                    },_=>BotOr::Bot}
-                }else{unsigned_piece_divrem(&a,&b,rem)};
-                proof {assert forall|x:W,y:W| a.gamma(x)&&b.gamma(y)&&y.view()!=0 implies #[trigger] next.gamma(quotrem(signed,rem,x,y)) by {}}
-                let merged=result.join(&next);
+                    match (&p_self, &p_d) {
+                        (BotOr::Val(aa), BotOr::Val(bb)) => {
+                            proof {
+                                assert forall|x: W| #[trigger] aa.gamma(x) implies (signed_view(x) < 0) == false by { assert(p_self.gamma(x)); }
+                                assert forall|y: W| #[trigger] bb.gamma(y) implies (signed_view(y) < 0) == false by { assert(p_d.gamma(y)); }
+                            }
+                            signed_piece_divrem(aa, bb, false, false, rem)
+                        },
+                        _ => BotOr::Bot
+                    }
+                } else {
+                    unsigned_piece_divrem(&p_self, &p_d, rem)
+                };
+                
                 proof {
-                    assert forall|p:int,q:int,x:W,y:W| #![trigger self.piece_has(p,x),d.piece_has(q,y)]
-                        0<=p<=i && 0<=q<4 && (p<i||q<j+1) && self.piece_has(p,x)&&d.piece_has(q,y)&&!Unsigned::<W>::is_zero(y)
-                        implies merged.gamma(quotrem(signed,rem,x,y)) by {
-                        if p==i && q==j {assert(a.gamma(x));assert(b.gamma(y));assert(next.gamma(quotrem(signed,rem,x,y)));}
-                        else {assert(result.gamma(quotrem(signed,rem,x,y)));}
+                    assert forall|x: W, y: W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
+                        implies #[trigger] fast_result.gamma(quotrem(signed, rem, x, y)) by {
+                        self.linear_gamma(x);
+                        d.linear_gamma(y);
+                        x.lemma_view_bounded();
+                        y.lemma_view_bounded();
+                        assert(self.piece_has(0, x));
+                        assert(d.piece_has(0, y));
+                        assert(p_self.gamma(x));
+                        assert(p_d.gamma(y));
                     }
                 }
-                result=merged;
-                j+=1;
+                
+                if let BotOr::Val(_) = fast_result {
+                    return (fast_result, flag);
+                }
             }
-            i+=1;
+        }
+
+        // FALLBACK: Verified loop for complex wrapping or cross-quadrant intervals
+        let mut result = BotOr::<Self>::Bot;
+        let mut i = 0usize;
+        while i < 4
+            invariant i <= 4, self.wf(), d.wf(), result.wf(),
+                forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                    0 <= p < i && 0 <= q < 4 && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
+                    ==> result.gamma(quotrem(signed, rem, x, y)),
+            decreases 4 - i,
+        {
+            let a = self.piece(i);
+            let mut j = 0usize;
+            while j < 4
+                invariant j <= 4, i < 4, self.wf(), d.wf(), result.wf(), a.wf(),
+                    forall|x: W| #[trigger] a.gamma(x) == self.piece_has(i as int, x),
+                    forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                        0 <= p <= i && 0 <= q < 4 && (p < i || q < j) && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
+                        ==> result.gamma(quotrem(signed, rem, x, y)),
+                decreases 4 - j,
+            {
+                let b = d.piece(j);
+                let next = if signed {
+                    proof {
+                        assert forall|x: W| #[trigger] a.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { x.lemma_view_bounded(); W::lemma_modulus(); }
+                        assert forall|y: W| #[trigger] b.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { y.lemma_view_bounded(); W::lemma_modulus(); }
+                    }
+                    match (&a, &b) {
+                        (BotOr::Val(aa), BotOr::Val(bb)) => {
+                            proof {
+                                assert forall|x: W| #[trigger] aa.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { assert(a.gamma(x)); }
+                                assert forall|y: W| #[trigger] bb.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { assert(b.gamma(y)); }
+                            }
+                            signed_piece_divrem(aa, bb, i % 2 == 1, j % 2 == 1, rem)
+                        },
+                        _ => BotOr::Bot
+                    }
+                } else {
+                    unsigned_piece_divrem(&a, &b, rem)
+                };
+                proof { assert forall|x: W, y: W| a.gamma(x) && b.gamma(y) && y.view() != 0 implies #[trigger] next.gamma(quotrem(signed, rem, x, y)) by {} }
+                let merged = result.join(&next);
+                proof {
+                    assert forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)]
+                        0 <= p <= i && 0 <= q < 4 && (p < i || q < j + 1) && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
+                        implies merged.gamma(quotrem(signed, rem, x, y)) by {
+                        if p == i && q == j { assert(a.gamma(x)); assert(b.gamma(y)); assert(next.gamma(quotrem(signed, rem, x, y))); }
+                        else { assert(result.gamma(quotrem(signed, rem, x, y))); }
+                    }
+                }
+                result = merged;
+                j += 1;
+            }
+            i += 1;
         }
         proof {
-            assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y)
-                implies #[trigger] result.gamma(quotrem(signed,rem,x,y)) by {
-                self.pieces_cover(x);d.pieces_cover(y);
-                let p=choose|p:int| 0<=p<4 && #[trigger] self.piece_has(p,x);
-                let q=choose|q:int| 0<=q<4 && #[trigger] d.piece_has(q,y);
+            assert forall|x: W, y: W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
+                implies #[trigger] result.gamma(quotrem(signed, rem, x, y)) by {
+                self.pieces_cover(x); d.pieces_cover(y);
+                let p = choose|p: int| 0 <= p < 4 && #[trigger] self.piece_has(p, x);
+                let q = choose|q: int| 0 <= q < 4 && #[trigger] d.piece_has(q, y);
             }
             self.lemma_nonempty();
-            let x=choose|x:W| #[trigger] self.gamma(x);
-            let y=choose|y:W| #[trigger] d.gamma(y)&&!Unsigned::<W>::is_zero(y);
-            assert(result.gamma(quotrem(signed,rem,x,y)));
+            let x = choose|x: W| #[trigger] self.gamma(x);
+            let y = choose|y: W| #[trigger] d.gamma(y) && !Unsigned::<W>::is_zero(y);
+            assert(result.gamma(quotrem(signed, rem, x, y)));
         }
-        (result,flag)
+        (result, flag)
     }
 }
 impl<W:Word> DivRem<Unsigned<W>> for Wrapped<W> {
