@@ -93,3 +93,74 @@ fn join_meet_and_widen_obey_the_sign_table() {
         matches!(S::from_kind(SignKind::NonZero).meet(&neg), BotOr::Val(value) if value == neg)
     );
 }
+
+use semi_persistent_abstract_domains::{
+    semantics::Signed,
+    transfer::{Arith, Mul},
+};
+
+#[test]
+fn exhaustive_i8_signed_transfers_are_sound() {
+    type S = Sign<u8>;
+    for left_kind in states() {
+        let left = S::from_kind(left_kind);
+        let neg = <S as Arith<Signed<u8>>>::neg(&left);
+        for x in 0..=u8::MAX {
+            if left.contains(x) {
+                assert!(neg.contains(x.wrapping_neg()), "neg: {left_kind:?}, {x}");
+            }
+        }
+        for right_kind in states() {
+            let right = S::from_kind(right_kind);
+            let add = <S as Arith<Signed<u8>>>::add(&left, &right);
+            let sub = <S as Arith<Signed<u8>>>::sub(&left, &right);
+            let mul = <S as Mul<Signed<u8>>>::mul(&left, &right);
+            for x in 0..=u8::MAX {
+                if left.contains(x) {
+                    for y in 0..=u8::MAX {
+                        if right.contains(y) {
+                            assert!(add.contains(x.wrapping_add(y)), "add: {left_kind:?}, {right_kind:?}, {x}, {y}");
+                            assert!(sub.contains(x.wrapping_sub(y)), "sub: {left_kind:?}, {right_kind:?}, {x}, {y}");
+                            assert!(mul.contains(x.wrapping_mul(y)), "mul: {left_kind:?}, {right_kind:?}, {x}, {y}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn signed_transfers_are_monotone_over_the_sign_lattice() {
+    type S = Sign<u8>;
+    for narrow_left_kind in states() {
+        let narrow_left = S::from_kind(narrow_left_kind);
+        for wide_left_kind in states() {
+            let wide_left = S::from_kind(wide_left_kind);
+            if !narrow_left.refines(&wide_left) { continue; }
+            assert!(
+                <S as Arith<Signed<u8>>>::neg(&narrow_left)
+                    .refines(&<S as Arith<Signed<u8>>>::neg(&wide_left))
+            );
+            for narrow_right_kind in states() {
+                let narrow_right = S::from_kind(narrow_right_kind);
+                for wide_right_kind in states() {
+                    let wide_right = S::from_kind(wide_right_kind);
+                    if !narrow_right.refines(&wide_right) { continue; }
+                    assert!(
+                        <S as Arith<Signed<u8>>>::add(&narrow_left, &narrow_right)
+                            .refines(&<S as Arith<Signed<u8>>>::add(&wide_left, &wide_right))
+                    );
+                    assert!(
+                        <S as Arith<Signed<u8>>>::sub(&narrow_left, &narrow_right)
+                            .refines(&<S as Arith<Signed<u8>>>::sub(&wide_left, &wide_right))
+                    );
+                    assert!(
+                        <S as Mul<Signed<u8>>>::mul(&narrow_left, &narrow_right)
+                            .refines(&<S as Mul<Signed<u8>>>::mul(&wide_left, &wide_right))
+                    );
+                }
+            }
+        }
+    }
+}
