@@ -218,3 +218,34 @@ impl<W: Word> Domain for Sign<W> {
     fn widen(&self, other: &Self) -> (r: Self) {self.join(other)}
 }
 }
+
+verus! {
+
+/// Signed machine arithmetic is modular. A sign alone has no magnitude, so
+/// every arithmetic case may cross the signed boundary. The initial transfers
+/// therefore return `Top`: they are universally sound for every supported
+/// width. More precise non-wrapping cases can be added later with their own
+/// containment proofs.
+impl<W: Word> Arith<Signed<W>> for Sign<W> {
+    fn add(&self, _o: &Self) -> (r: Self) {
+        Self::top()
+    }
+
+    fn sub(&self, _o: &Self) -> (r: Self) {
+        Self::top()
+    }
+
+    fn neg(&self) -> (r: Self) {
+        Self::top()
+    }
+}
+
+/// Multiplication is stretch scope. Its initial transfer is also conservative
+/// because a Sign value does not retain magnitudes that rule out wraparound.
+impl<W: Word> Mul<Signed<W>> for Sign<W> {
+    fn mul(&self, _o: &Self) -> (r: Self) {
+        Self::top()
+    }
+}
+
+} // verus!
