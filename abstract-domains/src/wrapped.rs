@@ -539,8 +539,8 @@ impl<W:Word> Wrapped<W> {
             lemma_fundamental_div_mod(W::modulus() as int, 2);
         }
 
-        if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr) {
-            if a.le(b) && b.lt(half) && c.le(d_hi) && d_hi.lt(half) {
+        if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr)
+            && a.le(b) && b.lt(half) && c.le(d_hi) && d_hi.lt(half) {
                 let p_self = self.piece(0);
                 let p_d = d.piece(0);
                 let fast_result = if signed {
@@ -579,7 +579,6 @@ impl<W:Word> Wrapped<W> {
                 if let BotOr::Val(_) = fast_result {
                     return (fast_result, flag);
                 }
-            }
         }
 
         // FALLBACK: Verified loop for complex wrapping or cross-quadrant intervals
