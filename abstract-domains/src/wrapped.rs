@@ -278,18 +278,39 @@ impl<W: Word> Domain for Wrapped<W> {
         }
     }
 
-    // TASK 2: Rewrite widen using the Navas APLAS 2012 doubling rule
+    /// Navas et al.'s moving-bound widening. `self` is the previous iterate
+    /// and `o` is the current iterate. When one end grows, retain the stable
+    /// end and move the other end forward by one previous arc length. This at
+    /// least doubles the previous arc before another widening is needed. If
+    /// both ends move, return `Top` conservatively.
     fn widen(&self, o: &Self) -> (r: Self)
-        ensures 
+        ensures
             r == *self || r.size() == W::modulus() as int || r.size() >= 2 * self.size(),
             forall|x: W| self.gamma(x) ==> r.gamma(x),
-            forall|x: W| o.gamma(x) ==> r.gamma(x)
+            forall|x: W| o.gamma(x) ==> r.gamma(x),
     {
         if o.leq(self) {
-            self.dup()
-        } else {
-            proof { W::lemma_modulus(); }
-            Self::top()
+            return self.dup();
+        }
+
+        let joined = self.join(o);
+        match (self.repr, joined.repr) {
+            (_, Repr::Top) | (Repr::Top, _) => Self::top(),
+            (Repr::Arc { lo: old_lo, hi: old_hi }, Repr::Arc { lo, hi }) => {
+                let span = dist(old_lo, old_hi).wrapping_add(W::one());
+                if let None = dist(lo, hi).checked_add(span) {
+                    return Self::top();
+                }
+                if lo.eq(old_lo) {
+                    let grown = Self::new(lo, hi.wrapping_add(span));
+                    joined.join(&grown)
+                } else if hi.eq(old_hi) {
+                    let grown = Self::new(lo.wrapping_sub(span), hi);
+                    joined.join(&grown)
+                } else {
+                    Self::top()
+                }
+            }
         }
     }
 }
