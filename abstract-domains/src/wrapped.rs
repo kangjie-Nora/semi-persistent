@@ -298,7 +298,10 @@ impl<W: Word> Domain for Wrapped<W> {
             (_, Repr::Top) | (Repr::Top, _) => Self::top(),
             (Repr::Arc { lo: old_lo, hi: old_hi }, Repr::Arc { lo, hi }) => {
                 let span = dist(old_lo, old_hi).wrapping_add(W::one());
-                if let None = dist(lo, hi).checked_add(span) {
+// Do not let native wraparound turn an attempted full-circle
+                // growth into a tiny arc. If the requested grown cardinality
+                // exceeds the word universe, `Top` is its canonical result.
+                if dist(lo, hi).checked_add(span).is_none() {
                     return Self::top();
                 }
                 if lo.eq(old_lo) {
@@ -449,6 +452,51 @@ impl<W: Word> Arith<Signed<W>> for Wrapped<W> {
 }
 
 impl<W:Word> Wrapped<W> {
+    // Unsigned division only needs the north-pole (zero) split.  Keeping this
+    // separate from the signed four-piece decomposition avoids unnecessary
+    // half-circle cuts and reduces the unsigned cross product from 16 pieces
+    // to four.
+    closed spec fn unsigned_piece_has(&self,k:int,x:W)->bool {
+        match self.repr {
+            Repr::Top => k == 0,
+            Repr::Arc{lo,hi} =>
+                if k == 0 {
+                    lo.view() <= x.view() && (lo.view() <= hi.view() ==> x.view() <= hi.view())
+                } else {
+                    k == 1 && lo.view() > hi.view() && x.view() <= hi.view()
+                }
+        }
+    }
+    fn unsigned_piece(&self,k:usize)->(r:BotOr<Interval<W>>)
+        requires self.wf(), k < 2,
+        ensures r.wf(), forall|x:W| #[trigger] r.gamma(x) == self.unsigned_piece_has(k as int,x),
+    {
+        let z=W::zero();
+        let max=W::max();
+        let (lo,hi)=match self.repr {
+            Repr::Top => {
+                if k==0 {(z,max)} else {return BotOr::Bot;}
+            },
+            Repr::Arc{lo,hi} => {
+                if lo.le(hi) {
+                    if k==0 {(lo,hi)} else {return BotOr::Bot;}
+                } else if k==0 {(lo,max)} else {(z,hi)}
+            },
+        };
+        let r=match Interval::new(lo,hi) {Some(i)=>BotOr::Val(i),None=>BotOr::Bot};
+        proof {assert forall|x:W| #[trigger] r.gamma(x)==self.unsigned_piece_has(k as int,x) by {x.lemma_view_bounded();}}
+        r
+    }
+    proof fn unsigned_pieces_cover(&self,x:W)
+        requires self.gamma(x),
+        ensures exists|k:int| 0<=k<2 && #[trigger] self.unsigned_piece_has(k,x),
+    {
+        x.lemma_view_bounded();
+        self.linear_gamma(x);
+        let k:int=match self.repr {Repr::Top=>0,Repr::Arc{lo,hi}=>if lo.view()>hi.view()&&x.view()<lo.view(){1}else{0}};
+        assert(self.unsigned_piece_has(k,x));
+    }
+
     // Four linear pieces: split first at zero, then at the signed half-circle.
     closed spec fn piece_has(&self,k:int,x:W)->bool {
         let lower = match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>
@@ -532,6 +580,43 @@ fn from_linear<W:Word>(v:BotOr<Interval<W>>)->(r:BotOr<Wrapped<W>>)
     }
 }
 impl<W:Word> Wrapped<W> {
+    /// Evaluate an unsigned division/remainder using only the north-pole
+    /// split. The signed path below still uses the half-circle pieces because
+    /// it must preserve the signs of both operands.
+    fn unsigned_divrem_fast(&self, d:&Self, rem:bool)->(r:BotOr<Self>)
+        requires self.wf(), d.wf(),
+        ensures r.wf(),
+            forall|x:W,y:W| self.gamma(x) && d.gamma(y) && y.view()!=0
+                ==> #[trigger] r.gamma(uquotrem(rem,x,y)),
+    {
+        let a0=self.unsigned_piece(0);
+        let a1=self.unsigned_piece(1);
+        let b0=d.unsigned_piece(0);
+        let b1=d.unsigned_piece(1);
+        let r00=unsigned_piece_divrem(&a0,&b0,rem);
+        let r01=unsigned_piece_divrem(&a0,&b1,rem);
+        let r10=unsigned_piece_divrem(&a1,&b0,rem);
+        let r11=unsigned_piece_divrem(&a1,&b1,rem);
+        let r=r00.join(&r01).join(&r10).join(&r11);
+        proof {
+            assert forall|x:W,y:W| self.gamma(x) && d.gamma(y) && y.view()!=0
+                implies #[trigger] r.gamma(uquotrem(rem,x,y)) by {
+                self.unsigned_pieces_cover(x);
+                d.unsigned_pieces_cover(y);
+                let i=choose|i:int| 0<=i<2 && #[trigger] self.unsigned_piece_has(i,x);
+                let j=choose|j:int| 0<=j<2 && #[trigger] d.unsigned_piece_has(j,y);
+                if i==0 && j==0 {assert(a0.gamma(x));assert(b0.gamma(y));assert(r00.gamma(uquotrem(rem,x,y)));}
+                else if i==0 && j==1 {assert(a0.gamma(x));assert(b1.gamma(y));assert(r01.gamma(uquotrem(rem,x,y)));}
+                else if i==1 && j==0 {assert(a1.gamma(x));assert(b0.gamma(y));assert(r10.gamma(uquotrem(rem,x,y)));}
+                else {assert(a1.gamma(x));assert(b1.gamma(y));assert(r11.gamma(uquotrem(rem,x,y)));}
+            }
+        }
+        r
+    }
+
+    // Verus does not yet support Rust let-chains; retain nested conditions
+    // below rather than using Clippy's suggested `if let ... && ...` form.
+    #[allow(clippy::collapsible_if)]
     fn divrem_impl(&self, d: &Self, rem: bool, signed: bool) -> (r: (BotOr<Self>, DivZero))
         requires self.wf(), d.wf(),
         ensures r.0.wf(),
@@ -543,6 +628,21 @@ impl<W:Word> Wrapped<W> {
     {
         let flag = d.zero_flag();
         if let DivZero::Always = flag { return (BotOr::Bot, flag); }
+
+        // Unsigned values need only a zero-pole split, so try the four-piece
+        // implementation before falling back to the signed decomposition.
+        if !signed {
+            let fast=self.unsigned_divrem_fast(d,rem);
+            proof {
+                assert forall|x:W,y:W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
+                    implies #[trigger] fast.gamma(quotrem(false,rem,x,y)) by {
+                    assert(fast.gamma(uquotrem(rem,x,y)));
+                }
+            }
+            if let BotOr::Val(_) = fast {
+                return (fast,flag);
+            }
+        }
 
         // FAST-PATH: O(1) bypass for simple, strictly positive, non-wrapping intervals
         proof { W::lemma_modulus(); }
