@@ -140,6 +140,20 @@ fn shared_bottom_lifts_and_split_meet() {
     assert!(bot.meet(&v).is_bot());
     assert!(matches!(bot.join(&v),BotOr::Val(w) if w==Wrapped::new(250,6)));
 }
+
+#[test]
+fn widening_keeps_the_stable_lower_bound_for_a_growing_loop() {
+    // Model `i = 10; while i < 60 { i += 3 }`.  Each new iterate is first
+    // joined with the old one, as the analysis worklist does, then widened.
+    // The moving-bound rule must retain the invariant lower bound instead of
+    // immediately discarding it with Top.
+    let mut state = Wrapped::<u8>::constant(10);
+    for next in (13u8..=61).step_by(3) {
+        let incoming = state.join(&Wrapped::constant(next));
+        state = state.widen(&incoming);
+    }
+    assert!(state == Wrapped::new(10, 62));
+}
 macro_rules! boundaries {
     ($name:ident,$ty:ty) => {
         #[test]
