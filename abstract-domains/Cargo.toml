@@ -15,7 +15,9 @@ required-features = ["bin"]
 bin = []
 
 [dependencies]
-vstd = "=0.0.0-2026-08-02-0125"
+vstd = "=0.0.0-2026-09-20-0158"
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
 
 [package.metadata.verus]
 verify = true
@@ -23,6 +25,7 @@ verify = true
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(verus_only)',
+  'cfg(verus_keep_ghost)',
 ] }
 
 [dev-dependencies]

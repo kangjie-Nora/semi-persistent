@@ -32,6 +32,29 @@ use vstd::prelude::*;
 
 verus! {
 
+/// Capability for crate-internal calls. The type is public, because the
+/// implementors of [`Tagged`] in consumer crates (the id macros) must name it
+/// in a method signature, but its field is private and its only constructor
+/// is `pub(crate)`. Code outside this crate therefore cannot create one, and
+/// cannot call a function that takes one: such a function is reachable from
+/// this crate's verified code alone, which discharges its precondition. That
+/// is what lets a public trait method carry a real precondition without
+/// exposing it to unverified callers (tools/check_partial_api.py treats a
+/// function taking `CrateOnly` as internal). Zero-sized; erased at runtime.
+///
+/// An implementor receives the token for the duration of the call; the id
+/// macros ignore it, and a hand-written `Tagged` impl must not pass it on.
+pub struct CrateOnly {
+    _private: (),
+}
+
+impl CrateOnly {
+    #[inline(always)]
+    pub(crate) fn new() -> Self {
+        CrateOnly { _private: () }
+    }
+}
+
 /// Bit-stealing contract for values that can carry a tag bit alongside them.
 ///
 /// prod-parity: `Default` matches production's `Tagged: Copy + Default`
@@ -41,7 +64,10 @@ verus! {
 /// resize-refill need. Every `Tagged` type is already `Default` (the id types,
 /// `Pair`, primitives).
 pub trait Tagged: Sized + Copy + core::default::Default {
-    type Repr: Sized + Copy;
+    /// `Send` because the consumer's mark/restore fans containers of reprs out
+    /// across the rayon pool (the e-graph's member fan-out); every concrete
+    /// `Repr` is a machine word, so the bound costs nothing to satisfy.
+    type Repr: Sized + Copy + Send;
 
     // -- ghost projections ---------------------------------------------------
 
@@ -79,29 +105,48 @@ pub trait Tagged: Sized + Copy + core::default::Default {
 
     /// Decode a `Repr` to its clean value, stripping the tag.
     fn from_repr(r: &Self::Repr) -> (v: Self)
-        requires Self::repr_wf(*r),
-        ensures v == Self::value_of(*r);
+        ensures Self::repr_wf(*r) ==> v == Self::value_of(*r);
+
+    /// Decode a `Repr` that carries no tag. The default is `from_repr`; a
+    /// type whose tag is a stolen bit overrides it with the unmasked read,
+    /// which on an untagged repr is the same value. The point is what the
+    /// optimizer sees: the stored word itself rather than a masked copy, so a
+    /// value written earlier is recognized when it is read back (an untracked
+    /// `InlineStore` never tags, and reads through this).
+    ///
+    /// Internal: it takes a [`CrateOnly`] token, so only this crate's verified
+    /// code can call it (the untracked `InlineStore::get`, whose invariant
+    /// proves the precondition). A total form (test the bit, refuse if set)
+    /// was measured and costs more than it saves.
+    #[doc(hidden)]
+    fn from_repr_clean(r: &Self::Repr, _tok: CrateOnly) -> (v: Self)
+        requires
+            Self::repr_wf(*r),
+            !Self::tag_of(*r),
+        ensures v == Self::value_of(*r),
+    {
+        Self::from_repr(r)
+    }
 
     /// Read the tag bit.
     fn tag(r: &Self::Repr) -> (b: bool)
-        requires Self::repr_wf(*r),
-        ensures b == Self::tag_of(*r);
+        ensures Self::repr_wf(*r) ==> b == Self::tag_of(*r);
 
     /// Set the tag bit. Value, well-formedness preserved.
     fn set_tag(r: &mut Self::Repr)
-        requires Self::repr_wf(*old(r)),
-        ensures
-            Self::repr_wf(*final(r)),
-            Self::value_of(*final(r)) == Self::value_of(*old(r)),
-            Self::tag_of(*final(r)) == true;
+        ensures Self::repr_wf(*old(r)) ==> {
+            &&& Self::repr_wf(*final(r))
+            &&& Self::value_of(*final(r)) == Self::value_of(*old(r))
+            &&& Self::tag_of(*final(r)) == true
+        };
 
     /// Clear the tag bit. Value, well-formedness preserved.
     fn clear_tag(r: &mut Self::Repr)
-        requires Self::repr_wf(*old(r)),
-        ensures
-            Self::repr_wf(*final(r)),
-            Self::value_of(*final(r)) == Self::value_of(*old(r)),
-            Self::tag_of(*final(r)) == false;
+        ensures Self::repr_wf(*old(r)) ==> {
+            &&& Self::repr_wf(*final(r))
+            &&& Self::value_of(*final(r)) == Self::value_of(*old(r))
+            &&& Self::tag_of(*final(r)) == false
+        };
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +280,7 @@ impl<AR: Copy, B: Copy> Clone for PairRepr<AR, B> {
     }
 }
 
-impl<A: Tagged, B: Copy + core::default::Default> Tagged for Pair<A, B> {
+impl<A: Tagged, B: Copy + core::default::Default + Send> Tagged for Pair<A, B> {
     type Repr = PairRepr<A::Repr, B>;
 
     open spec fn value_of(r: Self::Repr) -> Self { Pair { a: A::value_of(r.a), b: r.b } }

@@ -14,7 +14,9 @@ Two checks over src/*.rs:
    only in the enumerated pub(crate) external_body primitives.
 
 "Public" = `pub` without a restriction (`pub(crate)`, `pub(super)`,
-`pub(in ...)` are internal), plus any fn declared inside a `pub trait` block
+`pub(in ...)` are internal, and so is a fn taking the capability token
+`tagged::CrateOnly`, which only this crate can construct), plus any fn declared
+inside a `pub trait` block
 (trait items inherit the trait's visibility). spec/proof fns are skipped:
 spec fns are uncallable from exec code and proof fns are erased.
 
@@ -100,11 +102,17 @@ def scan_file(path: Path):
         i = text.find('(', m.end())
         if i == -1:
             continue
+        args_start = i
         depth = 1
         i += 1
         while i < len(text) and depth:
             depth += {'(': 1, ')': -1}.get(text[i], 0)
             i += 1
+        # A parameter of the crate's capability type `CrateOnly` (constructor
+        # `pub(crate)`, field private) makes the function uncallable outside
+        # the crate: internal, the same class as `pub(crate)`.
+        if re.search(r'\bCrateOnly\b', text[args_start:i]):
+            continue
         sig_start, depth = i, 0
         has_req = False
         while i < len(text):
@@ -131,6 +139,10 @@ def scan_file(path: Path):
             rm = re.search(r'\brequires\b(.*?)(?=\bensures\b|\brecommends\b|$)', sig, re.S)
             clause = rm.group(1) if rm else ''
             residue = re.sub(r'(old\(\w+\)|\w+)\s*(\.\s*\w+\s*\(\s*\))?\s*\.\s*(cursor_wf|cursor_ok|wf)\s*\(\s*\)', '', clause)
+            # A value compressor's `cwf(c)` is the compressed form's own
+            # well-formedness, established by `compress` and never broken:
+            # the same class as `wf`, spelled as an associated function.
+            residue = re.sub(r'(\w+::)+cwf\s*\(\s*\w+\s*\)', '', residue)
             residue = re.sub(r'[\s,]+', '', residue)
             if residue == '':
                 has_req = False
@@ -152,7 +164,19 @@ def main():
     allow_path = Path(sys.argv[2])
     update = '--update' in sys.argv
     partial, unsafe_pub = [], []
+    # Module visibility: a file declared `mod x;` or `pub(crate) mod x;` in
+    # lib.rs is not reachable from outside the crate, so its `pub` items are
+    # crate-private by construction (the sealed `DiffStoreOps` supertrait).
+    private_mods = set()
+    lib = src / 'lib.rs'
+    if lib.exists():
+        for m in re.finditer(r'^\s*(pub\((?:crate|super)\)\s+)?mod\s+(\w+)\s*;', lib.read_text(), re.M):
+            private_mods.add(m.group(2))
+        for m in re.finditer(r'^\s*pub\s+mod\s+(\w+)\s*;', lib.read_text(), re.M):
+            private_mods.discard(m.group(1))
     for f in sorted(src.glob('*.rs')):
+        if f.stem in private_mods:
+            continue
         for name, line, has_req, body_unsafe in scan_file(f):
             if has_req:
                 partial.append((name, line))
