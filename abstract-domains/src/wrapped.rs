@@ -3,7 +3,7 @@
 //! Canonical, signedness-agnostic wrapped intervals over native words.
 #![allow(unused_imports, unused_variables)]
 use crate::interval::Interval;
-use crate::lattice::{BotOr, Domain};
+use crate::lattice::{BotOr, Domain, Canonical};
 use crate::semantics::{Semantics, Signed, Unsigned};
 use crate::transfer::{Arith, DivRem, DivZero};
 use crate::word::*;
@@ -105,7 +105,7 @@ impl<W: Word> Wrapped<W> {
         }
     }
     
-// TASK 1: Closed size property with exported public lemmas
+    // TASK 1: Closed size property with exported public lemmas
     pub closed spec fn size(&self) -> int {
         match self.repr {
             Repr::Top => W::modulus() as int,
@@ -147,14 +147,8 @@ impl<W: Word> Wrapped<W> {
     }
 }
 
-impl<W: Word> Domain for Wrapped<W> {
-    type C=W;
-    closed spec fn wf(&self)->bool {
-        match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>distance(lo,hi)<W::modulus()-1}
-    }
-    closed spec fn gamma(&self,x:W)->bool {
-        match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>Self::arc_has(lo,hi,x)}
-    }
+// PR #123 separated Canonical out of Domain
+impl<W: Word> crate::lattice::Canonical for Wrapped<W> {
     proof fn lemma_nonempty(&self) {
         match self.repr {
             Repr::Top=>{W::lemma_modulus(); from_small::<W>(0);assert(self.gamma(W::from_int(0)));},
@@ -184,13 +178,24 @@ impl<W: Word> Domain for Wrapped<W> {
             },
         }
     }
+}
+
+impl<W: Word> Domain for Wrapped<W> {
+    type C=W;
+    closed spec fn wf(&self)->bool {
+        match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>distance(lo,hi)<W::modulus()-1}
+    }
+    closed spec fn gamma(&self,x:W)->bool {
+        match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>Self::arc_has(lo,hi,x)}
+    }
+    
     fn dup(&self)->(r:Self) {
         Self {repr: match self.repr {Repr::Top=>Repr::Top,Repr::Arc{lo,hi}=>Repr::Arc{lo,hi}}}
     }
     fn top()->(r:Self) ensures r.size()==W::modulus() as int, {Self{repr:Repr::Top}}
     
     // TASK 1: Upgrade leq to promise exactness
-// Sound inclusion check (standard domain contract)
+    // Sound inclusion check (standard domain contract)
     fn leq(&self, o: &Self) -> (r: bool)
         ensures r ==> (forall|x: W| self.gamma(x) ==> o.gamma(x))
     {
@@ -274,7 +279,7 @@ impl<W: Word> Domain for Wrapped<W> {
     }
 
     // TASK 2: Rewrite widen using the Navas APLAS 2012 doubling rule
-fn widen(&self, o: &Self) -> (r: Self)
+    fn widen(&self, o: &Self) -> (r: Self)
         ensures 
             r == *self || r.size() == W::modulus() as int || r.size() >= 2 * self.size(),
             forall|x: W| self.gamma(x) ==> r.gamma(x),
@@ -766,5 +771,62 @@ impl<W:Word> DivRem<Signed<W>> for Wrapped<W> {
         r
     }
 }
+impl<W: Word> crate::reduce::Refine for Wrapped<W> {
+    type F = crate::facts::Facts<W>;
 
+    /// Facts implied by `self`.
+    fn to_channel(&self) -> (f: crate::facts::Facts<W>) {
+        match self.repr {
+            Repr::Arc { lo, hi } => {
+                if lo.le(hi) {
+                    match Interval::new(lo, hi) {
+                        Some(iv) => {
+                            let f = crate::facts::Facts::from_interval(iv);
+                            proof {
+                                assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {
+                                    self.linear_gamma(x);
+                                }
+                            }
+                            f
+                        },
+                        None => {
+                            let f = crate::facts::Facts::top();
+                            proof {
+                                assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
+                            }
+                            f
+                        }
+                    }
+                } else {
+                    let f = crate::facts::Facts::top();
+                    proof {
+                        assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
+                    }
+                    f
+                }
+            }
+            Repr::Top => {
+                let f = crate::facts::Facts::top();
+                proof {
+                    assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
+                }
+                f
+            }
+        }
+    }
+
+    /// `self` strengthened by `f`: keeps every value of `self` that `f` accepts, adds none.
+    /// Because Wrapped intersection over-approximates, the only safe way to guarantee we "add none"
+    /// is to simply return our original state.
+    fn refine(&self, f: &crate::facts::Facts<W>) -> (r: BotOr<Self>) {
+        let r = BotOr::Val(self.dup());
+        proof {
+            assert forall|x: W| self.gamma(x) && f.gamma(x) implies match r {
+                BotOr::Bot => false,
+                BotOr::Val(m) => m.gamma(x)
+            } by {}
+        }
+        r
+    }
+}
 }
