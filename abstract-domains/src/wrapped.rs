@@ -511,6 +511,44 @@ fn from_linear<W:Word>(v:BotOr<Interval<W>>)->(r:BotOr<Wrapped<W>>)
     }
 }
 impl<W:Word> Wrapped<W> {
+    pub fn to_interval(&self) -> (iv: crate::interval::Interval<W>)
+        requires self.wf(),
+        ensures
+            iv.wf(),
+            forall|x: W| self.gamma(x) ==> #[trigger] iv.gamma(x),
+    {
+        match self.repr {
+            Repr::Arc { lo, hi } => {
+                if lo.le(hi) {
+                    match crate::interval::Interval::new(lo, hi) {
+                        Some(iv) => {
+                            proof {
+                                assert forall|x: W| self.gamma(x) implies #[trigger] iv.gamma(x) by {
+                                    self.linear_gamma(x);
+                                }
+                            }
+                            iv
+                        }
+                        None => {
+                            let top_iv = <crate::interval::Interval<W> as crate::lattice::Domain>::top();
+                            proof { assert forall|x: W| self.gamma(x) implies #[trigger] top_iv.gamma(x) by {} }
+                            top_iv
+                        }
+                    }
+                } else {
+                    let top_iv = <crate::interval::Interval<W> as crate::lattice::Domain>::top();
+                    proof { assert forall|x: W| self.gamma(x) implies #[trigger] top_iv.gamma(x) by {} }
+                    top_iv
+                }
+            }
+            Repr::Top => {
+                let top_iv = <crate::interval::Interval<W> as crate::lattice::Domain>::top();
+                proof { assert forall|x: W| self.gamma(x) implies #[trigger] top_iv.gamma(x) by {} }
+                top_iv
+            }
+        }
+    }
+
     #[allow(clippy::collapsible_if)] // Verus 1.98 does not support let-chains.
     fn divrem_impl(&self, d: &Self, rem: bool, signed: bool) -> (r: (BotOr<Self>, DivZero))
         requires self.wf(), d.wf(),
@@ -777,51 +815,22 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
 
     /// Facts implied by `self`.
     fn to_channel(&self) -> (f: BotOr<crate::facts::Facts<W>>) {
-        match self.repr {
-            Repr::Arc { lo, hi } => {
-                if lo.le(hi) {
-                    match Interval::new(lo, hi) {
-                        Some(iv) => {
-                            let f = crate::facts::Facts::from_interval(iv);
-                            proof {
-                                assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {
-                                    self.linear_gamma(x);
-                                }
-                            }
-                            BotOr::Val(f)
-                        },
-                        None => {
-                            let f = crate::facts::Facts::top();
-                            proof {
-                                assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
-                            }
-                            BotOr::Val(f)
-                        }
-                    }
-                } else {
-                    let f = crate::facts::Facts::top();
-                    proof {
-                        assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
-                    }
-                    BotOr::Val(f)
-                }
-            }
-            Repr::Top => {
-                let f = crate::facts::Facts::top();
-                proof {
-                    assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
-                }
-                BotOr::Val(f)
+        let iv = self.to_interval();
+        let fact = crate::facts::Facts::from_interval(iv);
+        proof {
+            assert(fact.wf());
+            assert forall|x: W| self.gamma(x) implies #[trigger] fact.gamma(x) by {
+                assert(iv.gamma(x));
             }
         }
+        BotOr::Val(fact)
     }
 
     /// `self` strengthened by `f`: keeps every value of `self` that `f` accepts, adds none.
-    /// Because Wrapped intersection over-approximates, the only safe way to guarantee we "add none"
-    /// is to simply return our original state.
     fn refine(&self, f: &crate::facts::Facts<W>) -> (r: BotOr<Self>) {
         let r = BotOr::Val(self.dup());
         proof {
+            assert(r.wf());
             assert forall|x: W| self.gamma(x) && f.gamma(x) implies match r {
                 BotOr::Bot => false,
                 BotOr::Val(m) => m.gamma(x)
@@ -831,3 +840,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
     }
 }
 }
+
+pub type WrappedU16 = Wrapped<u16>;
+pub type WrappedU32 = Wrapped<u32>;
+pub type WrappedU64 = Wrapped<u64>;
