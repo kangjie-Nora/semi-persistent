@@ -117,35 +117,41 @@ fn division_flags_and_results_are_sound() {
                 }
             }
 
-            // All possible sign categories are witnessed in this bounded model,
-            // so this is an exactness check for truncated integer division.
-            if let BotOr::Val(q) = tq {
-                for z in -12..=12 {
-                    let concrete =
-                        members(&a).any(|x| members(&b).filter(|y| *y != 0).any(|y| x / y == z));
-                    assert_eq!(
-                        q.contains(z),
-                        concrete,
-                        "trunc div: {a_kind:?}, {b_kind:?}, {z}"
-                    );
-                }
-            }
-
-            if b.kind() == SignKind::Pos {
-                for z in [-1, 0, 1] {
-                    let quotient = members(&a).any(|x| {
-                        members(&b)
-                            .filter(|y| *y != 0)
-                            .any(|y| x.div_euclid(y) == z)
-                    });
-                    let remainder = members(&a).any(|x| {
-                        members(&b)
-                            .filter(|y| *y != 0)
-                            .any(|y| x.rem_euclid(y) == z)
-                    });
-                    assert!(matches!(&eq, BotOr::Val(v) if v.contains(z) == quotient));
-                    assert!(matches!(&er, BotOr::Val(v) if v.contains(z) == remainder));
-                }
+            // Every sign category has a witness among -1, 0, and 1.  The
+            // bounded model therefore checks the exact sign result of each
+            // quotient/remainder transfer, while the Verus contracts prove
+            // universal containment.
+            for z in [-1, 0, 1] {
+                let trunc_quotient =
+                    members(&a).any(|x| members(&b).filter(|y| *y != 0).any(|y| x / y == z));
+                let trunc_remainder =
+                    members(&a).any(|x| members(&b).filter(|y| *y != 0).any(|y| x % y == z));
+                let euclid_quotient = members(&a).any(|x| {
+                    members(&b)
+                        .filter(|y| *y != 0)
+                        .any(|y| x.div_euclid(y) == z)
+                });
+                let euclid_remainder = members(&a).any(|x| {
+                    members(&b)
+                        .filter(|y| *y != 0)
+                        .any(|y| x.rem_euclid(y) == z)
+                });
+                assert!(
+                    matches!(&tq, BotOr::Val(v) if v.contains(z) == trunc_quotient),
+                    "trunc div: {a_kind:?}, {b_kind:?}, {z}"
+                );
+                assert!(
+                    matches!(&tr, BotOr::Val(v) if v.contains(z) == trunc_remainder),
+                    "trunc rem: {a_kind:?}, {b_kind:?}, {z}"
+                );
+                assert!(
+                    matches!(&eq, BotOr::Val(v) if v.contains(z) == euclid_quotient),
+                    "euclid div: {a_kind:?}, {b_kind:?}, {z}"
+                );
+                assert!(
+                    matches!(&er, BotOr::Val(v) if v.contains(z) == euclid_remainder),
+                    "euclid rem: {a_kind:?}, {b_kind:?}, {z}"
+                );
             }
         }
     }

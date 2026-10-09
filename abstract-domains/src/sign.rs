@@ -11,6 +11,7 @@ use crate::semantics::*;
 use crate::transfer::*;
 use crate::word::*;
 use vstd::arithmetic::div_mod::*;
+use vstd::arithmetic::mul::*;
 use vstd::prelude::*;
 
 verus! {
@@ -326,6 +327,134 @@ impl Sign {
         }
     }
 
+    /// Euclidean division has the complementary sign behaviour for a negative
+    /// divisor.  The remainder is always nonnegative, so a negative dividend
+    /// produces a strictly positive quotient and a positive dividend produces
+    /// a nonpositive quotient.
+    proof fn lemma_euclid_negative_divisor_sign(x: int, d: int)
+        requires d < 0,
+        ensures
+            x < 0 ==> x / d > 0,
+            x == 0 ==> x / d == 0,
+            x > 0 ==> x / d <= 0,
+    {
+        let q = x / d;
+        let r = x % d;
+        lemma_fundamental_div_mod(x, d);
+        assert(x == d * q + r);
+        assert(0 <= r);
+        assert(r < -d);
+        if x < 0 {
+            if q <= 0 {
+                lemma_mul_cancels_negatives(d, q);
+                lemma_mul_nonnegative(-d, -q);
+                assert(d * q >= 0);
+                assert(d * q + r >= 0) by {
+                    assert(d * q >= 0);
+                    assert(r >= 0);
+                }
+                assert(x >= 0);
+            }
+        } else if x == 0 {
+            lemma_div_of0(d);
+        } else if q > 0 {
+            lemma_mul_increases(q, -d);
+            lemma_mul_unary_negation(-d, q);
+            assert(d * q <= d);
+            assert(d + r < d + (-d));
+            assert(d + (-d) == 0);
+            assert(d + r < 0);
+            assert(d * q + r <= d + r) by {
+                assert(d * q <= d);
+            }
+            assert(d * q + r < 0);
+            assert(x < 0);
+        }
+    }
+
+    /// Verus integer remainder is Euclidean, including for a negative divisor.
+    proof fn lemma_euclid_rem_nonnegative(x: int, d: int)
+        requires d != 0,
+        ensures 0 <= x % d,
+    {
+        if d > 0 {
+            lemma_mod_bound(x, d);
+        } else {
+            lemma_fundamental_div_mod(x, d);
+            assert(0 <= x % d);
+        }
+    }
+
+    /// A truncated remainder has the sign of its dividend.  Re-expressing it
+    /// as the Euclidean remainder of the absolute values gives the required
+    /// bound in all four sign combinations of dividend and divisor.
+    proof fn lemma_trunc_rem_sign(x: int, d: int)
+        requires d != 0,
+        ensures
+            x < 0 ==> trem(x, d) <= 0,
+            x == 0 ==> trem(x, d) == 0,
+            x > 0 ==> trem(x, d) >= 0,
+    {
+        reveal(trem);
+        reveal(tdiv);
+        reveal(iabs);
+        if x > 0 {
+            if d > 0 {
+                lemma_fundamental_div_mod(x, d);
+                lemma_mod_bound(x, d);
+                assert(trem(x, d) == x - d * (x / d));
+                assert(trem(x, d) == x % d);
+            } else {
+                let ad = -d;
+                lemma_fundamental_div_mod(x, ad);
+                lemma_mod_bound(x, ad);
+                assert(tdiv(x, d) == -(x / ad));
+                lemma_mul_unary_negation(d, x / ad);
+                assert(trem(x, d) == x - d * tdiv(x, d));
+                assert(d == -ad);
+                assert(trem(x, d) == x - d * (-(x / ad)));
+                assert(d * (x / ad) == -(ad * (x / ad)));
+                assert(d * (-(x / ad)) == -(d * (x / ad)));
+                assert(d * (-(x / ad)) == ad * (x / ad));
+                assert(trem(x, d) == x - ad * (x / ad));
+                assert(trem(x, d) == x % ad);
+            }
+        } else if x < 0 {
+            let ax = -x;
+            if d > 0 {
+                lemma_fundamental_div_mod(ax, d);
+                lemma_mod_bound(ax, d);
+                assert(tdiv(x, d) == -(ax / d));
+                lemma_mul_unary_negation(d, ax / d);
+                assert(trem(x, d) == x - d * tdiv(x, d));
+                assert(trem(x, d) == -ax - d * (-(ax / d)));
+                assert(d * (-(ax / d)) == -(d * (ax / d)));
+                assert(trem(x, d) == -ax + d * (ax / d));
+                assert(trem(x, d) == -(ax - d * (ax / d)));
+                assert(trem(x, d) == -(ax % d));
+            } else {
+                let ad = -d;
+                lemma_fundamental_div_mod(ax, ad);
+                lemma_mod_bound(ax, ad);
+                assert(tdiv(x, d) == ax / ad);
+                assert(trem(x, d) == x - d * tdiv(x, d));
+                assert(d == -ad);
+                assert(trem(x, d) == -ax - (-ad) * (ax / ad));
+                lemma_mul_unary_negation(ad, ax / ad);
+                assert((-ad) * (ax / ad) == -(ad * (ax / ad)));
+                assert(trem(x, d) == -ax + ad * (ax / ad));
+                assert(trem(x, d) == -(ax - ad * (ax / ad)));
+                assert(trem(x, d) == -(ax % ad));
+            }
+        } else {
+            lemma_div_of0(d);
+            assert(tdiv(x, d) == 0);
+            assert(trem(x, d) == x - d * 0);
+            assert(x == 0);
+            assert(trem(x, d) == 0);
+        }
+    }
+
 
 }
 
@@ -336,47 +465,61 @@ impl DivRem<Euclid> for Sign {
     fn div(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
         match d.kind {
             SignKind::Zero => (BotOr::Bot, DivZero::Always),
-            SignKind::Pos => {
+            _ => {
                 let (xn, xz, xp) = self.kind.categories();
-                let q = Self::nonempty(xn, xz || xp, xp);
+                let (dn, _, dp) = d.kind.categories();
+                // Unlike truncated division, a negative numerator divided by a
+                // positive denominator is never zero under Euclidean division.
+                let q = Self::nonempty(
+                    (xn && dp) || (xp && dn),
+                    xz || xp,
+                    (xn && dn) || (xp && dp),
+                );
                 proof {
                     assert forall|x: int, y: int|
                         self.gamma(x) && d.gamma(y) && y != 0
                             implies #[trigger] q.gamma(x / y) by {
-                        Self::lemma_euclid_positive_divisor_sign(x, y);
+                        if y > 0 {
+                            Self::lemma_euclid_positive_divisor_sign(x, y);
+                        } else {
+                            Self::lemma_euclid_negative_divisor_sign(x, y);
+                        }
                     }
                 }
-                (BotOr::Val(q), DivZero::Never)
+                (BotOr::Val(q), Self::div_flag(d))
             }
-            _ => (BotOr::Val(Self::top()), Self::div_flag(d)),
         }
     }
     fn rem(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
         match d.kind {
             SignKind::Zero => (BotOr::Bot, DivZero::Always),
-            SignKind::Pos => {
-                let (xn, xz, xp) = self.kind.categories();
-                let q = Self::nonempty(false, true, xn || xp);
+            _ => match self.kind {
+            SignKind::Zero => {
+                let q = Self::from_kind(SignKind::Zero);
                 proof {
                     assert forall|x: int, y: int|
                         self.gamma(x) && d.gamma(y) && y != 0
                             implies #[trigger] q.gamma(x % y) by {
-                        lemma_mod_bound(x, y);
-                        if x == 0 {
-                            assert((0 as int) % y == 0);
-                            assert(q.gamma(0));
-                        } else if x < 0 {
-                            assert(xn);
-                            assert(q.gamma(x % y));
-                        } else {
-                            assert(xp);
-                            assert(q.gamma(x % y));
-                        }
+                        assert(self.kind.allows(x) == (x == 0));
+                        assert(self.gamma(x) == self.kind.allows(x));
+                        assert(x == 0);
+                        assert((0int) % y == 0);
                     }
                 }
-                (BotOr::Val(q), DivZero::Never)
+                (BotOr::Val(q), Self::div_flag(d))
             }
-            _ => (BotOr::Val(Self::top()), Self::div_flag(d)),
+            _ => {
+                let q = Self::from_kind(SignKind::NonNeg);
+                proof {
+                    assert forall|x: int, y: int|
+                        self.gamma(x) && d.gamma(y) && y != 0
+                            implies #[trigger] q.gamma(x % y) by {
+                        Self::lemma_euclid_rem_nonnegative(x, y);
+                    }
+                }
+                (BotOr::Val(q), Self::div_flag(d))
+            }
+            }
         }
     }
 }
@@ -410,7 +553,25 @@ impl DivRem<Trunc> for Sign {
     fn rem(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
         match d.kind {
             SignKind::Zero => (BotOr::Bot, DivZero::Always),
-            _ => (BotOr::Val(Self::top()), Self::div_flag(d)),
+            _ => {
+                let (xn, _, xp) = self.kind.categories();
+                // A nonzero dividend may still divide evenly, hence zero is
+                // always retained alongside the possible dividend signs.
+                let q = Self::nonempty(xn, true, xp);
+                proof {
+                    assert forall|x: int, y: int|
+                        self.gamma(x) && d.gamma(y) && y != 0
+                            implies #[trigger] q.gamma(trem(x, y)) by {
+                        Self::lemma_trunc_rem_sign(x, y);
+                        if x < 0 {
+                            assert(xn);
+                        } else if x > 0 {
+                            assert(xp);
+                        }
+                    }
+                }
+                (BotOr::Val(q), Self::div_flag(d))
+            }
         }
     }
 }
