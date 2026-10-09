@@ -3,9 +3,8 @@
 ## Public interface
 
 `wrapped::Wrapped<W: Word>` is a single domain per bit width. The current Word
-instances are u8, u16, u32 and u64. Signed interpretation uses the same bit
+instances are u8, u16, u32, u64 and u128. Signed interpretation uses the same bit
 patterns; signedness belongs to transfer semantics, not a second domain type.
-No u128 Word implementation is currently provided.
 
 The private representation is Top or a nonempty clockwise arc. `new(lo, hi)`
 converts every full-circle arc to Top; callers cannot construct a raw arc.
@@ -22,7 +21,7 @@ operations use the shared `lattice::BotOr`, not a domain-specific wrapper.
 ## Domain operations
 
 `leq`, `join`, `meet` and `widen` implement the shared Domain contracts against
-gamma. Join chooses the smaller covering arc; split meet preserves both exact
+gamma. `leq` is exact set inclusion. Join chooses the smaller covering arc; split meet preserves both exact
 intersection components and chooses their smaller cover. Equal-size choices use
 the unsigned lower endpoint. These operations are not ordinary lattice joins
 and meets; associativity and monotonicity must not be assumed.
@@ -73,7 +72,7 @@ result is a deterministic join of all piece-pair results.
 The reuse of Interval remainder bounds and the final single-arc cover can add
 spurious values. Remainder is not claimed exact even for every singleton pair.
 Six tests check all u8 singleton operand pairs, 4,225 sampled abstract pairs
-with exhaustive concrete operands, exact zero flags, and boundaries at all four
+with exhaustive concrete operands, exact zero flags, and boundaries at all five
 widths. Expected signed values use Rust wrapping_div/wrapping_rem; division by
 zero is checked separately. These tests check containment for general results.
 
@@ -89,7 +88,7 @@ zero is checked separately. These tests check containment for general results.
   Bot iff disjoint, symmetry, minimum covering cardinality via an independent
   longest-gap oracle, and widening growth. This is not every possible u8 pair.
 - A split-intersection regression and actual shared BotOr lifting are exercised.
-- Four-width boundary tests include constants, sign boundaries and full circles.
+- Five-width boundary tests include constants, sign boundaries and full circles.
 
 ```sh
 cargo test -p semi-persistent-abstract-domains
