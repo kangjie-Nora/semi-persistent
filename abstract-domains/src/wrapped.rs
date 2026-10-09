@@ -896,7 +896,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
     type F = crate::facts::Facts<W>;
 
     /// Facts implied by `self`.
-    fn to_channel(&self) -> (f: crate::facts::Facts<W>) {
+    fn to_channel(&self) -> (f: BotOr<crate::facts::Facts<W>>) {
         match self.repr {
             Repr::Arc { lo, hi } => {
                 if lo.le(hi) {
@@ -908,14 +908,14 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                                     self.linear_gamma(x);
                                 }
                             }
-                            f
+                            BotOr::Val(f)
                         },
                         None => {
                             let f = crate::facts::Facts::top();
                             proof {
                                 assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                             }
-                            f
+                            BotOr::Val(f)
                         }
                     }
                 } else {
@@ -923,7 +923,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                     proof {
                         assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                     }
-                    f
+                    BotOr::Val(f)
                 }
             }
             Repr::Top => {
@@ -931,21 +931,25 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                 proof {
                     assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                 }
-                f
+                BotOr::Val(f)
             }
         }
     }
 
-    /// `self` strengthened by `f`: keeps every value of `self` that `f` accepts, adds none.
-    /// Because Wrapped intersection over-approximates, the only safe way to guarantee we "add none"
-    /// is to simply return our original state.
+    /// Intersect with the unsigned interval fact. `meet` uses a single wrapped
+    /// arc cover when an exact intersection has two arcs, which remains a
+    /// sound refinement and does not add values outside `self`.
     fn refine(&self, f: &crate::facts::Facts<W>) -> (r: BotOr<Self>) {
-        let r = BotOr::Val(self.dup());
+        let u = f.interval();
+        let (lo, hi) = u.bounds();
+        let r = self.meet(&Self::new(lo, hi));
         proof {
             assert forall|x: W| self.gamma(x) && f.gamma(x) implies match r {
                 BotOr::Bot => false,
                 BotOr::Val(m) => m.gamma(x)
-            } by {}
+            } by {
+                assert(u.gamma(x) == f.gamma(x));
+            }
         }
         r
     }
