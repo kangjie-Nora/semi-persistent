@@ -28,8 +28,11 @@ the unsigned lower endpoint. These operations are not ordinary lattice joins
 and meets; associativity and monotonicity must not be assumed.
 
 Meet additionally proves Bot if and only if the exact intersection is empty.
-Widen leaves contained inputs unchanged. Otherwise it accepts the joined arc only
-when cardinality at least doubles, and jumps to Top for smaller growth. Thus an
+Widen treats `self` as the previous iterate and the other operand as the current
+iterate. It leaves contained inputs unchanged. When one endpoint remains fixed,
+it expands the moving endpoint by the previous cardinality, retaining the stable
+bound. If both endpoints move or expansion fills the word universe, it returns
+Top. The endpoint-distance lemmas and public `lemma_size_monotone` prove that an
 unstable step increases cardinality by at least a factor of two, capped at 2^N;
 the measure is the number of remaining doublings. Besides shared soundness,
 the implementation formally proves that each result is unchanged, Top, or at
@@ -97,3 +100,15 @@ Use the versions pinned by the repository. Proof totals and scope are recorded
 in `doc/proof-status.md`. The implemented shared interfaces are Domain, Arith
 and DivRem. Bitwise, Shift, Cast and Compare are listed as future shared traits
 in domain-traits.md; this port does not introduce competing interfaces for them.
+
+## Shared facts and refinement
+
+`Refine::to_channel` returns `BotOr<Facts<W>>`. Non-wrapping arcs export their
+unsigned interval exactly; wrapping arcs conservatively export Top.
+`refine` intersects with the interval fact, accepting the single-arc cover only
+when it is a subset of the original arc. A disconnected intersection can make
+that cover extend outside the original arc; in that case refinement retains the
+original value. Verus proves preservation of every jointly possible value and
+that the result never grows. Tests enumerate all u8 endpoint pairs for fact
+export and check sampled refinements, repeated-refinement stability, the split
+intersection regression, and the two-round product convergence example.
