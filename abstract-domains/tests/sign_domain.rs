@@ -130,6 +130,23 @@ fn division_flags_and_results_are_sound() {
                     );
                 }
             }
+
+            if b.kind() == SignKind::Pos {
+                for z in [-1, 0, 1] {
+                    let quotient = members(&a).any(|x| {
+                        members(&b)
+                            .filter(|y| *y != 0)
+                            .any(|y| x.div_euclid(y) == z)
+                    });
+                    let remainder = members(&a).any(|x| {
+                        members(&b)
+                            .filter(|y| *y != 0)
+                            .any(|y| x.rem_euclid(y) == z)
+                    });
+                    assert!(matches!(&eq, BotOr::Val(v) if v.contains(z) == quotient));
+                    assert!(matches!(&er, BotOr::Val(v) if v.contains(z) == remainder));
+                }
+            }
         }
     }
 }
