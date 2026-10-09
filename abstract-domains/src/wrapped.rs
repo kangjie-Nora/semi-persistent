@@ -3,7 +3,7 @@
 //! Canonical, signedness-agnostic wrapped intervals over native words.
 #![allow(unused_imports, unused_variables)]
 use crate::interval::Interval;
-use crate::lattice::{BotOr, Domain, Canonical};
+use crate::lattice::{BotOr, Canonical, Domain};
 use crate::semantics::{Semantics, Signed, Unsigned};
 use crate::transfer::{Arith, DivRem, DivZero};
 use crate::word::*;
@@ -104,7 +104,7 @@ impl<W: Word> Wrapped<W> {
             }
         }
     }
-    
+
     // TASK 1: Closed size property with exported public lemmas
     pub closed spec fn size(&self) -> int {
         match self.repr {
@@ -112,7 +112,7 @@ impl<W: Word> Wrapped<W> {
             Repr::Arc { lo, hi } => distance(lo, hi) + 1
         }
     }
-    
+
     pub proof fn lemma_size_bounds(&self)
         requires self.wf(),
         ensures 1 <= self.size() && self.size() <= W::modulus() as int,
@@ -125,7 +125,7 @@ impl<W: Word> Wrapped<W> {
                 W::lemma_modulus();
             }
         }
-    }  
+    }
     proof fn missing(&self)
         requires self.wf(), self.repr !is Top,
         ensures exists|x: W| !#[trigger] self.gamma(x),
@@ -188,12 +188,12 @@ impl<W: Word> Domain for Wrapped<W> {
     closed spec fn gamma(&self,x:W)->bool {
         match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>Self::arc_has(lo,hi,x)}
     }
-    
+
     fn dup(&self)->(r:Self) {
         Self {repr: match self.repr {Repr::Top=>Repr::Top,Repr::Arc{lo,hi}=>Repr::Arc{lo,hi}}}
     }
     fn top()->(r:Self) ensures r.size()==W::modulus() as int, {Self{repr:Repr::Top}}
-    
+
     // TASK 1: Upgrade leq to promise exactness
     // Sound inclusion check (standard domain contract)
     fn leq(&self, o: &Self) -> (r: bool)
@@ -203,7 +203,7 @@ impl<W: Word> Domain for Wrapped<W> {
             (_, Repr::Top) => true,
             (Repr::Top, _) => false,
             (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d }) => {
-                let r = (a.eq(c) && b.eq(d)) || 
+                let r = (a.eq(c) && b.eq(d)) ||
                         (o.contains(a) && o.contains(b) && (!self.contains(c) || !self.contains(d)));
                 proof {
                     if r {
@@ -217,7 +217,7 @@ impl<W: Word> Domain for Wrapped<W> {
             },
         }
     }
-    
+
     fn join(&self,o:&Self)->(r:Self) {
         match (self.repr,o.repr) {
             (Repr::Top,_)|(_,Repr::Top)=>Self::top(),
@@ -280,7 +280,7 @@ impl<W: Word> Domain for Wrapped<W> {
 
     // TASK 2: Rewrite widen using the Navas APLAS 2012 doubling rule
     fn widen(&self, o: &Self) -> (r: Self)
-        ensures 
+        ensures
             r == *self || r.size() == W::modulus() as int || r.size() >= 2 * self.size(),
             forall|x: W| self.gamma(x) ==> r.gamma(x),
             forall|x: W| o.gamma(x) ==> r.gamma(x)
@@ -511,6 +511,7 @@ fn from_linear<W:Word>(v:BotOr<Interval<W>>)->(r:BotOr<Wrapped<W>>)
     }
 }
 impl<W:Word> Wrapped<W> {
+    #[allow(clippy::collapsible_if)] // Verus 1.98 does not support let-chains.
     fn divrem_impl(&self, d: &Self, rem: bool, signed: bool) -> (r: (BotOr<Self>, DivZero))
         requires self.wf(), d.wf(),
         ensures r.0.wf(),
@@ -532,16 +533,16 @@ impl<W:Word> Wrapped<W> {
             None => { proof { assert(false); } z }
         };
         let h = max.udiv(two);
-        proof { 
-            lemma_div_decreases(max.view() as int, 2); 
-            lemma_fundamental_div_mod((W::modulus() - 1) as int, 2); 
+        proof {
+            lemma_div_decreases(max.view() as int, 2);
+            lemma_fundamental_div_mod((W::modulus() - 1) as int, 2);
         }
         let half = match h.checked_add(W::one()) {
             Some(v) => v,
             None => { proof { assert(false); } z }
         };
-        proof { 
-            lemma_fundamental_div_mod(W::modulus() as int, 2); 
+        proof {
+            lemma_fundamental_div_mod(W::modulus() as int, 2);
         }
 
         if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr) {
@@ -566,7 +567,7 @@ impl<W:Word> Wrapped<W> {
                 } else {
                     unsigned_piece_divrem(&p_self, &p_d, rem)
                 };
-                
+
                 proof {
                     assert forall|x: W, y: W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
                         implies #[trigger] fast_result.gamma(quotrem(signed, rem, x, y)) by {
@@ -580,7 +581,7 @@ impl<W:Word> Wrapped<W> {
                         assert(p_d.gamma(y));
                     }
                 }
-                
+
                 if let BotOr::Val(_) = fast_result {
                     return (fast_result, flag);
                 }
@@ -592,7 +593,7 @@ impl<W:Word> Wrapped<W> {
         let mut i = 0usize;
         while i < 4
             invariant i <= 4, self.wf(), d.wf(), result.wf(),
-                forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)]
                     0 <= p < i && 0 <= q < 4 && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
                     ==> result.gamma(quotrem(signed, rem, x, y)),
             decreases 4 - i,
@@ -602,7 +603,7 @@ impl<W:Word> Wrapped<W> {
             while j < 4
                 invariant j <= 4, i < 4, self.wf(), d.wf(), result.wf(), a.wf(),
                     forall|x: W| #[trigger] a.gamma(x) == self.piece_has(i as int, x),
-                    forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                    forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)]
                         0 <= p <= i && 0 <= q < 4 && (p < i || q < j) && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
                         ==> result.gamma(quotrem(signed, rem, x, y)),
                 decreases 4 - j,
@@ -775,7 +776,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
     type F = crate::facts::Facts<W>;
 
     /// Facts implied by `self`.
-    fn to_channel(&self) -> (f: crate::facts::Facts<W>) {
+    fn to_channel(&self) -> (f: BotOr<crate::facts::Facts<W>>) {
         match self.repr {
             Repr::Arc { lo, hi } => {
                 if lo.le(hi) {
@@ -787,14 +788,14 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                                     self.linear_gamma(x);
                                 }
                             }
-                            f
+                            BotOr::Val(f)
                         },
                         None => {
                             let f = crate::facts::Facts::top();
                             proof {
                                 assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                             }
-                            f
+                            BotOr::Val(f)
                         }
                     }
                 } else {
@@ -802,7 +803,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                     proof {
                         assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                     }
-                    f
+                    BotOr::Val(f)
                 }
             }
             Repr::Top => {
@@ -810,7 +811,7 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
                 proof {
                     assert forall|x: W| self.gamma(x) implies #[trigger] f.gamma(x) by {}
                 }
-                f
+                BotOr::Val(f)
             }
         }
     }
