@@ -82,21 +82,29 @@ fn wrapped_refinement_is_sound_and_stable() {
         for &hi in &endpoints {
             let wrapped = W8::new(lo, hi);
             for f in &facts {
-                let refined = unwrap_value(wrapped.refine(f));
-                let refined_twice = unwrap_value(refined.refine(f));
-                for x in 0..=u8::MAX {
-                    assert!(
-                        !(wrapped.contains(x) && facts_contains(f, x)) || refined.contains(x),
-                        "refinement lost joint value {x}"
-                    );
-                    assert!(
-                        !refined.contains(x) || wrapped.contains(x),
-                        "refinement added value {x}"
-                    );
-                    assert!(
-                        !refined_twice.contains(x) || refined.contains(x),
-                        "a second refinement added value {x}"
-                    );
+                match wrapped.refine(f) {
+                    BotOr::Bot => assert!(
+                        (0..=u8::MAX).all(|x| !(wrapped.contains(x) && facts_contains(f, x)))
+                    ),
+                    BotOr::Val(refined) => {
+                        let refined_twice = unwrap_value(refined.refine(f));
+                        for x in 0..=u8::MAX {
+                            assert!(
+                                !(wrapped.contains(x) && facts_contains(f, x))
+                                    || refined.contains(x),
+                                "refinement lost joint value {x}"
+                            );
+                            assert!(
+                                !refined.contains(x) || wrapped.contains(x),
+                                "refinement added value {x}"
+                            );
+                            assert_eq!(
+                                refined_twice.contains(x),
+                                refined.contains(x),
+                                "a second refinement changed membership of {x}"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -143,5 +151,22 @@ fn wrapped_interval_product_reduction_preserves_concretization() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn split_refinement_never_grows_and_product_converges() {
+    let original = W8::new(250, 10);
+    let split_fact = F8::from_interval(interval(1, 254));
+    let refined = unwrap_value(original.refine(&split_fact));
+    assert!(refined == original);
+    for a in [W8::new(250, 5), W8::new(0, 5)] {
+        let p = P8 {
+            a,
+            b: interval(0, 10),
+        };
+        let r = unwrap_value(p.reduce(2));
+        assert!(r.a == W8::new(0, 5));
+        assert_eq!(r.b.bounds(), (0, 5));
     }
 }
