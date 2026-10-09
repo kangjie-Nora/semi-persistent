@@ -66,3 +66,22 @@ and Unum conversions/arithmetic helpers.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
+
+## Sign over mathematical integers
+
+`Sign` is the seven nonempty sign sets over `int`; `BotOr<Sign>` supplies the
+eighth, empty state. Its representation is canonical, and `leq`, `join`, and
+`meet` are exact with respect to `gamma`. `Arith<Euclid>` and `Arith<Trunc>`
+prove universal containment for negation, addition, and subtraction; `Mul` is
+also proved for both integer semantics. The Sign domain exports bounds through
+`FactsZ` and its `Refine` implementation proves that it preserves every jointly
+represented value and never grows the Sign component.
+
+`DivRem<Euclid>` and `DivRem<Trunc>` have exact zero classification and sound
+results. Truncated division additionally returns the exact abstract sign
+category. Euclidean division/remainder and truncated remainder deliberately
+return `Top` for a nonzero divisor pending their category-precision proofs;
+this is sound but is deferred precision work. The Sign runtime suite checks all
+7-by-7 abstract category pairs against concrete values from `[-12, 12]`,
+including lattice exactness, transfer containment, flags, and FactsZ
+refinement no-growth.
