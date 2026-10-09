@@ -3,7 +3,11 @@
 //! Exhaustive small-model checks for the mathematical-integer Sign domain.
 
 use semi_persistent_abstract_domains::{
+    facts_z::FactsZ,
+    ibig::IBig,
+    interval_z::{Hi, IntervalZ, Lo},
     lattice::{BotOr, Domain},
+    reduce::Refine,
     semantics::{Euclid, Trunc},
     sign::{Sign, SignKind},
     transfer::{Arith, DivRem, Mul},
@@ -23,6 +27,18 @@ fn states() -> [SignKind; 7] {
 
 fn members(s: &Sign) -> impl Iterator<Item = i128> + '_ {
     (-12..=12).filter(move |x| s.contains(*x))
+}
+
+fn z(x: i64) -> IBig {
+    IBig::from_i64(x)
+}
+
+fn facts(lo: i64, hi: i64) -> FactsZ {
+    FactsZ::from_interval(IntervalZ::new(Lo::Fin(z(lo)), Hi::Fin(z(hi))).unwrap())
+}
+
+fn fact_has(f: &FactsZ, x: i64) -> bool {
+    IntervalZ::constant(z(x)).leq(&f.interval())
 }
 
 #[test]
@@ -113,6 +129,30 @@ fn division_flags_and_results_are_sound() {
                         "trunc div: {a_kind:?}, {b_kind:?}, {z}"
                     );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn refinement_with_integer_facts_preserves_and_never_grows() {
+    let fact_ranges = [(-8, -2), (-3, 0), (-1, 1), (0, 0), (1, 5), (-6, 6)];
+    for kind in states() {
+        let sign = Sign::from_kind(kind);
+        for (lo, hi) in fact_ranges {
+            let f = facts(lo, hi);
+            let refined = <Sign as Refine>::refine(&sign, &f);
+            for x in -12..=12i128 {
+                let expected = sign.contains(x) && fact_has(&f, x as i64);
+                let actual = match &refined {
+                    BotOr::Bot => false,
+                    BotOr::Val(s) => s.contains(x),
+                };
+                assert!(
+                    expected <= actual,
+                    "{kind:?} refined by [{lo}, {hi}] lost {x}"
+                );
+                assert!(!actual || sign.contains(x));
             }
         }
     }
