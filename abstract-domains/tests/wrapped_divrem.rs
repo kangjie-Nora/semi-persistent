@@ -126,3 +126,5 @@ boundary!(u8_boundary, u8);
 boundary!(u16_boundary, u16);
 boundary!(u32_boundary, u32);
 boundary!(u64_boundary, u64);
+
+boundary!(u128_boundary, u128);
