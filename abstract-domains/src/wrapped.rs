@@ -627,6 +627,11 @@ impl<W:Word> Wrapped<W> {
         }
 
         // FALLBACK: Verified loop for complex wrapping or cross-quadrant intervals
+        
+        // 1. Build each operand's pieces EXACTLY ONCE before the loops
+        let a_pieces = (self.piece(0), self.piece(1), self.piece(2), self.piece(3));
+        let b_pieces = (d.piece(0), d.piece(1), d.piece(2), d.piece(3));
+
         let mut result = BotOr::<Self>::Bot;
         let mut i = 0usize;
         while i < 4
@@ -636,7 +641,9 @@ impl<W:Word> Wrapped<W> {
                     ==> result.gamma(quotrem(signed, rem, x, y)),
             decreases 4 - i,
         {
-            let a = self.piece(i);
+            // Map the loop index to our precomputed pieces using references
+            let a = if i == 0 { &a_pieces.0 } else if i == 1 { &a_pieces.1 } else if i == 2 { &a_pieces.2 } else { &a_pieces.3 };
+            
             let mut j = 0usize;
             while j < 4
                 invariant j <= 4, i < 4, self.wf(), d.wf(), result.wf(), a.wf(),
@@ -646,25 +653,33 @@ impl<W:Word> Wrapped<W> {
                         ==> result.gamma(quotrem(signed, rem, x, y)),
                 decreases 4 - j,
             {
-                let b = d.piece(j);
-                let next = if signed {
-                    proof {
-                        assert forall|x: W| #[trigger] a.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { x.lemma_view_bounded(); W::lemma_modulus(); }
-                        assert forall|y: W| #[trigger] b.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { y.lemma_view_bounded(); W::lemma_modulus(); }
-                    }
-                    match (&a, &b) {
-                        (BotOr::Val(aa), BotOr::Val(bb)) => {
+                let b = if j == 0 { &b_pieces.0 } else if j == 1 { &b_pieces.1 } else if j == 2 { &b_pieces.2 } else { &b_pieces.3 };
+                
+                // 2. Skip evaluating the pair if either piece is Bot
+                let next = match (a, b) {
+                    (BotOr::Bot, _) | (_, BotOr::Bot) => BotOr::Bot,
+                    _ => {
+                        if signed {
                             proof {
-                                assert forall|x: W| #[trigger] aa.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { assert(a.gamma(x)); }
-                                assert forall|y: W| #[trigger] bb.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { assert(b.gamma(y)); }
+                                assert forall|x: W| #[trigger] a.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { x.lemma_view_bounded(); W::lemma_modulus(); }
+                                assert forall|y: W| #[trigger] b.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { y.lemma_view_bounded(); W::lemma_modulus(); }
                             }
-                            signed_piece_divrem(aa, bb, i % 2 == 1, j % 2 == 1, rem)
-                        },
-                        _ => BotOr::Bot
+                            match (a, b) {
+                                (BotOr::Val(aa), BotOr::Val(bb)) => {
+                                    proof {
+                                        assert forall|x: W| #[trigger] aa.gamma(x) implies (signed_view(x) < 0) == (i % 2 == 1) by { assert(a.gamma(x)); }
+                                        assert forall|y: W| #[trigger] bb.gamma(y) implies (signed_view(y) < 0) == (j % 2 == 1) by { assert(b.gamma(y)); }
+                                    }
+                                    signed_piece_divrem(aa, bb, i % 2 == 1, j % 2 == 1, rem)
+                                },
+                                _ => BotOr::Bot
+                            }
+                        } else {
+                            unsigned_piece_divrem(a, b, rem)
+                        }
                     }
-                } else {
-                    unsigned_piece_divrem(&a, &b, rem)
                 };
+
                 proof { assert forall|x: W, y: W| a.gamma(x) && b.gamma(y) && y.view() != 0 implies #[trigger] next.gamma(quotrem(signed, rem, x, y)) by {} }
                 let merged = result.join(&next);
                 proof {
