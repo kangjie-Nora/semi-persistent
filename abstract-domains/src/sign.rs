@@ -302,6 +302,30 @@ impl Sign {
         lemma_div_pos_is_pos(iabs(x), iabs(y));
     }
 
+    proof fn lemma_negative_one_div(d: int)
+        requires d > 0,
+        ensures (-1int) / d == -1,
+    {
+        lemma_fundamental_div_mod_converse(-1, d, -1, d - 1);
+    }
+
+    proof fn lemma_euclid_positive_divisor_sign(x: int, d: int)
+        requires d > 0,
+        ensures
+            x < 0 ==> x / d < 0,
+            x == 0 ==> x / d == 0,
+            x > 0 ==> x / d >= 0,
+    {
+        if x < 0 {
+            Self::lemma_negative_one_div(d);
+            lemma_div_is_ordered(x, -1, d);
+        } else if x == 0 {
+            lemma_div_of0(d);
+        } else {
+            lemma_div_pos_is_pos(x, d);
+        }
+    }
+
 
 }
 
@@ -312,12 +336,46 @@ impl DivRem<Euclid> for Sign {
     fn div(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
         match d.kind {
             SignKind::Zero => (BotOr::Bot, DivZero::Always),
+            SignKind::Pos => {
+                let (xn, xz, xp) = self.kind.categories();
+                let q = Self::nonempty(xn, xz || xp, xp);
+                proof {
+                    assert forall|x: int, y: int|
+                        self.gamma(x) && d.gamma(y) && y != 0
+                            implies #[trigger] q.gamma(x / y) by {
+                        Self::lemma_euclid_positive_divisor_sign(x, y);
+                    }
+                }
+                (BotOr::Val(q), DivZero::Never)
+            }
             _ => (BotOr::Val(Self::top()), Self::div_flag(d)),
         }
     }
     fn rem(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
         match d.kind {
             SignKind::Zero => (BotOr::Bot, DivZero::Always),
+            SignKind::Pos => {
+                let (xn, xz, xp) = self.kind.categories();
+                let q = Self::nonempty(false, true, xn || xp);
+                proof {
+                    assert forall|x: int, y: int|
+                        self.gamma(x) && d.gamma(y) && y != 0
+                            implies #[trigger] q.gamma(x % y) by {
+                        lemma_mod_bound(x, y);
+                        if x == 0 {
+                            assert((0 as int) % y == 0);
+                            assert(q.gamma(0));
+                        } else if x < 0 {
+                            assert(xn);
+                            assert(q.gamma(x % y));
+                        } else {
+                            assert(xp);
+                            assert(q.gamma(x % y));
+                        }
+                    }
+                }
+                (BotOr::Val(q), DivZero::Never)
+            }
             _ => (BotOr::Val(Self::top()), Self::div_flag(d)),
         }
     }
