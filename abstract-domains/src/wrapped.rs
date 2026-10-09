@@ -3,7 +3,7 @@
 //! Canonical, signedness-agnostic wrapped intervals over native words.
 #![allow(unused_imports, unused_variables)]
 use crate::interval::Interval;
-use crate::lattice::{BotOr, Domain, Canonical};
+use crate::lattice::{BotOr, Canonical, Domain};
 use crate::semantics::{Semantics, Signed, Unsigned};
 use crate::transfer::{Arith, DivRem, DivZero};
 use crate::word::*;
@@ -50,6 +50,47 @@ proof fn from_small<W: Word>(n: int)
     lemma_small_mod(n as nat, W::modulus());
 }
 
+/// Advancing an endpoint by `step` grows its clockwise distance from `lo`
+/// by exactly `step`, provided the resulting arc is not the full circle.
+proof fn lemma_distance_advance<W: Word>(lo: W, hi: W, step: W)
+    requires
+        distance(lo, hi) + step.view() < W::modulus(),
+    ensures
+        distance(lo, W::from_int(hi.view() as int + step.view() as int))
+            == distance(lo, hi) + step.view(),
+{
+    lo.lemma_view_bounded();
+    hi.lemma_view_bounded();
+    step.lemma_view_bounded();
+    W::lemma_modulus();
+    W::lemma_from_int(hi.view() as int + step.view() as int);
+    let n = hi.view() as int + step.view() as int;
+    let m = W::modulus() as int;
+    if n < m { lemma_small_mod(n as nat, m as nat); }
+    else {
+        lemma_mod_sub_multiples_vanish(n, m);
+        lemma_small_mod((n-m) as nat, m as nat);
+    }
+
+}
+
+proof fn lemma_distance_retreat<W: Word>(lo: W, hi: W, step: W)
+    requires distance(lo, hi) + step.view() < W::modulus(),
+    ensures distance(W::from_int(lo.view() as int - step.view() as int), hi)
+        == distance(lo, hi) + step.view(),
+{
+    lo.lemma_view_bounded(); hi.lemma_view_bounded(); step.lemma_view_bounded();
+    W::lemma_modulus();
+    let n = lo.view() as int - step.view() as int;
+    let m = W::modulus() as int;
+    W::lemma_from_int(n);
+    if n >= 0 { lemma_small_mod(n as nat, m as nat); }
+    else {
+        lemma_mod_add_multiples_vanish(n, m);
+        lemma_small_mod((n+m) as nat, m as nat);
+    }
+}
+
 impl<W: Word> Wrapped<W> {
     pub open spec fn arc_has(lo: W, hi: W, x: W) -> bool {
         distance(lo, x) <= distance(lo, hi)
@@ -64,7 +105,8 @@ impl<W: Word> Wrapped<W> {
     { lo.lemma_view_bounded(); hi.lemma_view_bounded(); x.lemma_view_bounded(); }
 
     pub fn new(lo: W, hi: W) -> (r: Self)
-        ensures r.wf(), forall|x: W| #[trigger] r.gamma(x) == Self::arc_has(lo, hi, x),
+        ensures r.wf(), r.size() == distance(lo, hi) + 1,
+            forall|x: W| #[trigger] r.gamma(x) == Self::arc_has(lo, hi, x),
     {
         let d = dist(lo,hi);
         let max = W::max();
@@ -104,15 +146,15 @@ impl<W: Word> Wrapped<W> {
             }
         }
     }
-    
-    // TASK 1: Closed size property with exported public lemmas
+
+    /// Number of concrete bit patterns represented by this value.
     pub closed spec fn size(&self) -> int {
         match self.repr {
             Repr::Top => W::modulus() as int,
             Repr::Arc { lo, hi } => distance(lo, hi) + 1
         }
     }
-    
+
     pub proof fn lemma_size_bounds(&self)
         requires self.wf(),
         ensures 1 <= self.size() && self.size() <= W::modulus() as int,
@@ -125,7 +167,37 @@ impl<W: Word> Wrapped<W> {
                 W::lemma_modulus();
             }
         }
-    }  
+    }
+    pub proof fn lemma_size_monotone(&self, o: &Self)
+        requires self.wf(), o.wf(),
+            forall|x: W| #[trigger] self.gamma(x) ==> o.gamma(x),
+        ensures self.size() <= o.size(),
+    {
+        self.lemma_size_bounds(); o.lemma_size_bounds();
+        match (self.repr, o.repr) {
+            (_, Repr::Top) => {},
+            (Repr::Top, _) => {
+                o.missing();
+                let x = choose|x: W| !#[trigger] o.gamma(x);
+                assert(self.gamma(x)); assert(o.gamma(x));
+            },
+            (Repr::Arc{lo:a,hi:b}, Repr::Arc{lo:c,hi:d}) => {
+                a.lemma_view_bounded(); b.lemma_view_bounded();
+                c.lemma_view_bounded(); d.lemma_view_bounded();
+                assert(self.gamma(a)); assert(self.gamma(b));
+                assert(o.gamma(a)); assert(o.gamma(b));
+                let prev = if c.view()==0 {W::modulus()-1} else {c.view()-1};
+                from_small::<W>(prev);
+                let x = W::from_int(prev);
+                assert(!o.gamma(x));
+                assert(!self.gamma(x));
+                self.linear_gamma(x); o.linear_gamma(x);
+                self.linear_gamma(a); self.linear_gamma(b);
+                o.linear_gamma(a); o.linear_gamma(b);
+                assert(self.size() <= o.size());
+            }
+        }
+    }
     proof fn missing(&self)
         requires self.wf(), self.repr !is Top,
         ensures exists|x: W| !#[trigger] self.gamma(x),
@@ -188,12 +260,12 @@ impl<W: Word> Domain for Wrapped<W> {
     closed spec fn gamma(&self,x:W)->bool {
         match self.repr {Repr::Top=>true,Repr::Arc{lo,hi}=>Self::arc_has(lo,hi,x)}
     }
-    
+
     fn dup(&self)->(r:Self) {
         Self {repr: match self.repr {Repr::Top=>Repr::Top,Repr::Arc{lo,hi}=>Repr::Arc{lo,hi}}}
     }
     fn top()->(r:Self) ensures r.size()==W::modulus() as int, {Self{repr:Repr::Top}}
-    
+
     // TASK 1: Upgrade leq to promise exactness
     // Sound inclusion check (standard domain contract)
     fn leq(&self, o: &Self) -> (r: bool)
@@ -203,7 +275,7 @@ impl<W: Word> Domain for Wrapped<W> {
             (_, Repr::Top) => true,
             (Repr::Top, _) => false,
             (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d }) => {
-                let r = (a.eq(c) && b.eq(d)) || 
+                let r = (a.eq(c) && b.eq(d)) ||
                         (o.contains(a) && o.contains(b) && (!self.contains(c) || !self.contains(d)));
                 proof {
                     if r {
@@ -217,7 +289,7 @@ impl<W: Word> Domain for Wrapped<W> {
             },
         }
     }
-    
+
     fn join(&self,o:&Self)->(r:Self) {
         match (self.repr,o.repr) {
             (Repr::Top,_)|(_,Repr::Top)=>Self::top(),
@@ -297,19 +369,50 @@ impl<W: Word> Domain for Wrapped<W> {
         match (self.repr, joined.repr) {
             (_, Repr::Top) | (Repr::Top, _) => Self::top(),
             (Repr::Arc { lo: old_lo, hi: old_hi }, Repr::Arc { lo, hi }) => {
-                let span = dist(old_lo, old_hi).wrapping_add(W::one());
-// Do not let native wraparound turn an attempted full-circle
+                let old_distance = dist(old_lo, old_hi);
+                let span = old_distance.wrapping_add(W::one());
+                proof {
+                    self.lemma_size_monotone(&joined);
+                    lo.lemma_view_bounded(); hi.lemma_view_bounded(); span.lemma_view_bounded(); W::lemma_modulus();
+                    from_small::<W>(old_distance.view() as int + 1);
+                    assert(span.view() == self.size());
+                }
+                // Do not let native wraparound turn an attempted full-circle
                 // growth into a tiny arc. If the requested grown cardinality
                 // exceeds the word universe, `Top` is its canonical result.
-                if dist(lo, hi).checked_add(span).is_none() {
-                    return Self::top();
+                let grown_size = dist(lo, hi).checked_add(span);
+                match grown_size {
+                    None => { return Self::top(); },
+                    Some(n) => { proof { n.lemma_view_bounded(); } },
                 }
                 if lo.eq(old_lo) {
+                    proof { lemma_distance_advance(lo, hi, span); wrap_view::<W>(hi.view() as int + span.view() as int); }
                     let grown = Self::new(lo, hi.wrapping_add(span));
-                    joined.join(&grown)
+                    proof {
+                        grown.lemma_size_bounds();
+                        assert forall|x: W| #[trigger] joined.gamma(x) implies grown.gamma(x) by {
+                            joined.linear_gamma(x); grown.linear_gamma(x);
+                            x.lemma_view_bounded();
+                        }
+                        assert forall|x: W| self.gamma(x) || o.gamma(x) implies #[trigger] grown.gamma(x) by {
+                            if self.gamma(x) || o.gamma(x) { assert(joined.gamma(x)); }
+                        }
+                    }
+                    grown
                 } else if hi.eq(old_hi) {
+                    proof { lemma_distance_retreat(lo, hi, span); wrap_view::<W>(lo.view() as int - span.view() as int); }
                     let grown = Self::new(lo.wrapping_sub(span), hi);
-                    joined.join(&grown)
+                    proof {
+                        grown.lemma_size_bounds();
+                        assert forall|x: W| #[trigger] joined.gamma(x) implies grown.gamma(x) by {
+                            joined.linear_gamma(x); grown.linear_gamma(x);
+                            x.lemma_view_bounded();
+                        }
+                        assert forall|x: W| self.gamma(x) || o.gamma(x) implies #[trigger] grown.gamma(x) by {
+                            if self.gamma(x) || o.gamma(x) { assert(joined.gamma(x)); }
+                        }
+                    }
+                    grown
                 } else {
                     Self::top()
                 }
@@ -617,6 +720,7 @@ impl<W:Word> Wrapped<W> {
     // Verus does not yet support Rust let-chains; retain nested conditions
     // below rather than using Clippy's suggested `if let ... && ...` form.
     #[allow(clippy::collapsible_if)]
+    #[allow(clippy::collapsible_if)] // The pinned verifier does not support let-chains.
     fn divrem_impl(&self, d: &Self, rem: bool, signed: bool) -> (r: (BotOr<Self>, DivZero))
         requires self.wf(), d.wf(),
         ensures r.0.wf(),
@@ -653,16 +757,16 @@ impl<W:Word> Wrapped<W> {
             None => { proof { assert(false); } z }
         };
         let h = max.udiv(two);
-        proof { 
-            lemma_div_decreases(max.view() as int, 2); 
-            lemma_fundamental_div_mod((W::modulus() - 1) as int, 2); 
+        proof {
+            lemma_div_decreases(max.view() as int, 2);
+            lemma_fundamental_div_mod((W::modulus() - 1) as int, 2);
         }
         let half = match h.checked_add(W::one()) {
             Some(v) => v,
             None => { proof { assert(false); } z }
         };
-        proof { 
-            lemma_fundamental_div_mod(W::modulus() as int, 2); 
+        proof {
+            lemma_fundamental_div_mod(W::modulus() as int, 2);
         }
 
         if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr) {
@@ -687,7 +791,7 @@ impl<W:Word> Wrapped<W> {
                 } else {
                     unsigned_piece_divrem(&p_self, &p_d, rem)
                 };
-                
+
                 proof {
                     assert forall|x: W, y: W| self.gamma(x) && d.gamma(y) && !Unsigned::<W>::is_zero(y)
                         implies #[trigger] fast_result.gamma(quotrem(signed, rem, x, y)) by {
@@ -701,7 +805,7 @@ impl<W:Word> Wrapped<W> {
                         assert(p_d.gamma(y));
                     }
                 }
-                
+
                 if let BotOr::Val(_) = fast_result {
                     return (fast_result, flag);
                 }
@@ -713,7 +817,7 @@ impl<W:Word> Wrapped<W> {
         let mut i = 0usize;
         while i < 4
             invariant i <= 4, self.wf(), d.wf(), result.wf(),
-                forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)]
                     0 <= p < i && 0 <= q < 4 && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
                     ==> result.gamma(quotrem(signed, rem, x, y)),
             decreases 4 - i,
@@ -723,7 +827,7 @@ impl<W:Word> Wrapped<W> {
             while j < 4
                 invariant j <= 4, i < 4, self.wf(), d.wf(), result.wf(), a.wf(),
                     forall|x: W| #[trigger] a.gamma(x) == self.piece_has(i as int, x),
-                    forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)] 
+                    forall|p: int, q: int, x: W, y: W| #![trigger self.piece_has(p, x), d.piece_has(q, y)]
                         0 <= p <= i && 0 <= q < 4 && (p < i || q < j) && self.piece_has(p, x) && d.piece_has(q, y) && !Unsigned::<W>::is_zero(y)
                         ==> result.gamma(quotrem(signed, rem, x, y)),
                 decreases 4 - j,
@@ -936,13 +1040,17 @@ impl<W: Word> crate::reduce::Refine for Wrapped<W> {
         }
     }
 
-    /// Intersect with the unsigned interval fact. `meet` uses a single wrapped
-    /// arc cover when an exact intersection has two arcs, which remains a
-    /// sound refinement and does not add values outside `self`.
+    /// Intersect with the unsigned interval fact. When that intersection has
+    /// two arcs, `meet` uses a single-arc cover which may grow past `self`.
+    /// A refinement may never do that, so retain `self` in that case.
     fn refine(&self, f: &crate::facts::Facts<W>) -> (r: BotOr<Self>) {
         let u = f.interval();
         let (lo, hi) = u.bounds();
-        let r = self.meet(&Self::new(lo, hi));
+        let m = self.meet(&Self::new(lo, hi));
+        let r = match m {
+            BotOr::Bot => BotOr::Bot,
+            BotOr::Val(m) => if m.leq(self) { BotOr::Val(m) } else { BotOr::Val(self.dup()) },
+        };
         proof {
             assert forall|x: W| self.gamma(x) && f.gamma(x) implies match r {
                 BotOr::Bot => false,

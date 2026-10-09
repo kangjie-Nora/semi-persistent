@@ -134,3 +134,15 @@ Verification uses the repository-pinned Verus
 
 The finite-height/rank theorem remains future lattice work; this semantic core
 does not yet prove the termination bound for join-based widening.
+
+## Wrapped widening and shared-facts refinement
+
+The moving-bound widening proves containment and the termination condition:
+the result is unchanged, Top, or has at least twice the previous cardinality.
+Public size bounds and `lemma_size_monotone` support use of that measure by
+callers. Endpoint advance/retreat lemmas and the constructor's exact size
+contract connect native wrapping operations to the cardinality proof.
+`Refine` proves preservation of the intersection with `Facts<W>` and no growth
+outside the input. Split intersections fall back to the original arc when their
+single-arc cover would grow outside it. `wrapped_refine` checks fact export,
+refinement stability, and product reduction against concrete u8 membership.
