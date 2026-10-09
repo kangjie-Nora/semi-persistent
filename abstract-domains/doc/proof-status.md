@@ -4,10 +4,9 @@ Last refreshed: 2026-10-01.
 
 ## Current result
 
-```text
-cargo verus verify
-1187 verified, 0 errors
-```
+`cargo verus verify` reports 0 errors; CI runs it on every pull request. This
+file does not record the number of verified items, because every change to the
+crate moves it.
 
 The project source contains no executable `admit()` or `assume()` calls. CI
 enforces that policy with a source scan and runs ordinary Verus verification.
@@ -44,7 +43,7 @@ implementation corresponds to the verified definitions.
 | L1 | bit primitives and infinite-bitstring natural operations | proved |
 | L2 | Tnum, Anum, Unum, and division theory | proved |
 | L3 | chopped bounded-width domains | every stated contract verifies; containment covers the explicit operation inventory in `design.md`, not every defined operation |
-| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval`, `ReducedProduct` at four enabled widths | every method verifies its stated contract; containment scope is listed below |
+| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval` at four enabled widths | every method verifies its stated contract; containment scope is listed below |
 
 All enabled L4 results are proved well formed where their contracts say so.
 The current **universal containment** contracts are:
@@ -55,17 +54,35 @@ The current **universal containment** contracts are:
 | `ExecAnum` | `add`, `div_const` |
 | `ExecUnum` | `top`, `add`, `from_interval`, `mul` |
 | `Interval` | `add`, `meet`, `join`, `div_const` |
-| `ReducedProduct` | `reduce`, `add` |
 
 The `ExecUnum` proofs use native/spec bridge lemmas, the L3 `ChoppedUnum`
 soundness theorems, explicit overflow-to-top cases, and interval-to-Unum range
-lemmas. `ReducedProduct::add` composes the four component containment
-postconditions and then applies the proved containment of `reduce`.
+lemmas. #123 removed `ReducedProduct`, whose `reduce` and `add` carried
+containment theorems; `reduce::Product` replaces it.
 
 Other executable methods currently prove well-formedness only. In particular,
 this includes Tnum multiplication, shifts, negation and subtraction, most
-Unum conversions/arithmetic helpers, and ReducedProduct bitwise operations,
-subtraction, multiplication, division, shifts, joins, meets, and negation.
+and Unum conversions/arithmetic helpers.
 Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
+
+## Sign over mathematical integers
+
+`Sign` is the seven nonempty sign sets over `int`; `BotOr<Sign>` supplies the
+eighth, empty state. Its representation is canonical, and `leq`, `join`, and
+`meet` are exact with respect to `gamma`. `Arith<Euclid>` and `Arith<Trunc>`
+prove universal containment for negation, addition, and subtraction; `Mul` is
+also proved for both integer semantics. The Sign domain exports bounds through
+`FactsZ` and its `Refine` implementation proves that it preserves every jointly
+represented value and never grows the Sign component.
+
+`DivRem<Euclid>` and `DivRem<Trunc>` have exact zero classification and sound
+results. Truncated division additionally returns the exact abstract sign
+category. For a positive Euclidean divisor, both quotient and remainder return
+the exact Sign category. Other Euclidean division/remainder cases and truncated
+remainder deliberately return `Top` for a nonzero divisor pending their
+category-precision proofs; this is sound but is deferred precision work. The Sign runtime suite checks all
+7-by-7 abstract category pairs against concrete values from `[-12, 12]`,
+including lattice exactness, transfer containment, flags, and FactsZ
+refinement no-growth.
