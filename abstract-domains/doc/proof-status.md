@@ -67,20 +67,18 @@ Their implementations and finite mirror tests are evidence, but not universal
 containment theorems. Adding those postconditions and proofs is the remaining
 L4 soundness work.
 
-## Sign Domain
+## Sign over mathematical integers
 
-`sign::Sign<W: Word>` is a bottomless, width-generic machine domain for the
-seven nonempty sign sets: negative, zero, positive, nonpositive, nonnegative,
-nonzero and top. `lattice::BotOr<Sign<W>>::Bot` is the sole empty value.
+`Sign` is the seven nonempty sign sets over `int`; `BotOr<Sign>` supplies the
+eighth, empty state. Its representation is canonical, and `leq`, `join`, and
+`meet` are exact with respect to `gamma`. `Arith<Euclid>` and `Arith<Trunc>`
+prove universal containment for negation, addition, and subtraction; `Mul` is
+also proved for both integer semantics. The Sign domain exports bounds through
+`FactsZ` and its `Refine` implementation proves that it preserves every jointly
+represented value and never grows the Sign component.
 
-The domain implements the shared `Domain` interface for `u8`, `u16`, `u32`
-and `u64`. Membership uses the two's-complement signed interpretation of the
-word. The representation is canonical, `refines` is proved equivalent to
-concrete-set inclusion, and `join`, `meet`, and `widen` meet their universal
-gamma contracts. The finite sign lattice laws are also proved.
-
-The dedicated runtime suite has four tests: all 49 nonempty state pairs over
-every `u8` bit pattern; Bottom and Top behavior; the sign table for
-join/meet/widen; and MIN, zero, and maximum-positive boundaries at each
-supported width. Arithmetic transfers are deliberately not included in this
-Week 5 core PR; they are the bounded Week 6 work.
+`DivRem<Euclid>` and `DivRem<Trunc>` have exact zero classification and sound
+results with exact Sign categories. The Sign runtime suite checks all 7-by-7
+abstract category pairs against concrete values from `[-12, 12]`, including
+lattice exactness, arithmetic-transfer exactness, exact zero flags, and FactsZ
+refinement no-growth.
