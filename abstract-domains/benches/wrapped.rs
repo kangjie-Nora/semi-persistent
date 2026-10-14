@@ -15,29 +15,37 @@ fn bench_wrapped_vs_interval(c: &mut Criterion) {
     let w1 = WrappedU64::new(100, 500);
     let w2 = WrappedU64::new(400, 800);
 
-    // Join comparison
-    group.bench_function("interval_join", |b| {
-        b.iter(|| black_box(&i1).join(black_box(&i2)))
-    });
-    group.bench_function("wrapped_join_non_wrapping", |b| {
-        b.iter(|| black_box(&w1).join(black_box(&w2)))
-    });
+    // Join & Meet
+    group.bench_function("interval_join", |b| b.iter(|| black_box(&i1).join(black_box(&i2))));
+    group.bench_function("wrapped_join_non_wrapping", |b| b.iter(|| black_box(&w1).join(black_box(&w2))));
+    
+    group.bench_function("interval_meet", |b| b.iter(|| black_box(&i1).meet(black_box(&i2))));
+    group.bench_function("wrapped_meet_non_wrapping", |b| b.iter(|| black_box(&w1).meet(black_box(&w2))));
 
-    // Unsigned Add comparison
-    group.bench_function("interval_add", |b| {
-        b.iter(|| <Interval<u64> as Arith<Unsigned<u64>>>::add(black_box(&i1), black_box(&i2)))
-    });
-    group.bench_function("wrapped_add_non_wrapping", |b| {
-        b.iter(|| <WrappedU64 as Arith<Unsigned<u64>>>::add(black_box(&w1), black_box(&w2)))
-    });
+    // Arithmetic (Add, Sub, Mul)
+    group.bench_function("interval_add", |b| b.iter(|| <Interval<u64> as Arith<Unsigned<u64>>>::add(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_add_non_wrapping", |b| b.iter(|| <WrappedU64 as Arith<Unsigned<u64>>>::add(black_box(&w1), black_box(&w2))));
 
-    // Unsigned Division comparison
-    group.bench_function("interval_udiv", |b| {
-        b.iter(|| <Interval<u64> as DivRem<Unsigned<u64>>>::div(black_box(&i1), black_box(&i2)))
-    });
-    group.bench_function("wrapped_udiv_fast_path", |b| {
-        b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&w1), black_box(&w2)))
-    });
+    group.bench_function("interval_sub", |b| b.iter(|| <Interval<u64> as Arith<Unsigned<u64>>>::sub(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_sub_non_wrapping", |b| b.iter(|| <WrappedU64 as Arith<Unsigned<u64>>>::sub(black_box(&w1), black_box(&w2))));
+
+    // Note: If `mul` is not yet implemented for `Wrapped`, you may need to comment out these two lines temporarily.
+    //group.bench_function("interval_mul", |b| b.iter(|| <Interval<u64> as Arith<Unsigned<u64>>>::mul(black_box(&i1), black_box(&i2))));
+    //group.bench_function("wrapped_mul_non_wrapping", |b| b.iter(|| <WrappedU64 as Arith<Unsigned<u64>>>::mul(black_box(&w1), black_box(&w2))));
+
+    // Division & Remainder (Unsigned)
+    group.bench_function("interval_udiv", |b| b.iter(|| <Interval<u64> as DivRem<Unsigned<u64>>>::div(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_udiv_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&w1), black_box(&w2))));
+
+    group.bench_function("interval_urem", |b| b.iter(|| <Interval<u64> as DivRem<Unsigned<u64>>>::rem(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_urem_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::rem(black_box(&w1), black_box(&w2))));
+
+    // Division & Remainder (Signed)
+    group.bench_function("interval_sdiv", |b| b.iter(|| <Interval<u64> as DivRem<Signed<u64>>>::div(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_sdiv_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::div(black_box(&w1), black_box(&w2))));
+
+    group.bench_function("interval_srem", |b| b.iter(|| <Interval<u64> as DivRem<Signed<u64>>>::rem(black_box(&i1), black_box(&i2))));
+    group.bench_function("wrapped_srem_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::rem(black_box(&w1), black_box(&w2))));
 
     group.finish();
 }
@@ -50,21 +58,21 @@ fn bench_wrapped_division_cases(c: &mut Criterion) {
     let wrapping_1 = WrappedU64::new(u64::MAX - 200, 100);
     let wrapping_2 = WrappedU64::new(u64::MAX - 50, 20);
 
-    // Unsigned: fast-path vs wrapping loop
-    group.bench_function("udiv_fast_path", |b| {
-        b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&small_pos_1), black_box(&small_pos_2)))
-    });
-    group.bench_function("udiv_wrapping_loop", |b| {
-        b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&wrapping_1), black_box(&wrapping_2)))
-    });
+    // Unsigned Div
+    group.bench_function("udiv_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&small_pos_1), black_box(&small_pos_2))));
+    group.bench_function("udiv_wrapping_loop", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::div(black_box(&wrapping_1), black_box(&wrapping_2))));
 
-    // Signed: fast-path vs wrapping 4x4 loop
-    group.bench_function("sdiv_fast_path", |b| {
-        b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::div(black_box(&small_pos_1), black_box(&small_pos_2)))
-    });
-    group.bench_function("sdiv_wrapping_loop", |b| {
-        b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::div(black_box(&wrapping_1), black_box(&wrapping_2)))
-    });
+    // Unsigned Rem
+    group.bench_function("urem_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::rem(black_box(&small_pos_1), black_box(&small_pos_2))));
+    group.bench_function("urem_wrapping_loop", |b| b.iter(|| <WrappedU64 as DivRem<Unsigned<u64>>>::rem(black_box(&wrapping_1), black_box(&wrapping_2))));
+
+    // Signed Div
+    group.bench_function("sdiv_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::div(black_box(&small_pos_1), black_box(&small_pos_2))));
+    group.bench_function("sdiv_wrapping_loop", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::div(black_box(&wrapping_1), black_box(&wrapping_2))));
+
+    // Signed Rem
+    group.bench_function("srem_fast_path", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::rem(black_box(&small_pos_1), black_box(&small_pos_2))));
+    group.bench_function("srem_wrapping_loop", |b| b.iter(|| <WrappedU64 as DivRem<Signed<u64>>>::rem(black_box(&wrapping_1), black_box(&wrapping_2))));
 
     group.finish();
 }
