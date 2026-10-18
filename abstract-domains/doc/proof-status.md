@@ -23,8 +23,9 @@ Enabled executable widths:
 - `d64` (`u64`)
 
 The `d128` macro invocation remains disabled because its bitvector obligations
-exceed the current solver capacity. Do not describe `u128` as an enabled or
-verified executable instance.
+exceed the current solver capacity. Only the generic `Interval<W>` and
+`Wrapped<W>` domains cover `u128`; do not describe `ExecTnum`, `ExecAnum`, or
+`ExecUnum` as verified executable `u128` instances.
 
 The separate Rust mirror suite can be run with:
 

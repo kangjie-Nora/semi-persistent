@@ -1,12 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! Canonical, signedness-agnostic wrapped intervals over native words.
-#![allow(unused_imports, unused_variables)]
 use crate::interval::Interval;
+#[allow(unused_imports)]
 use crate::lattice::{BotOr, Canonical, Domain};
+#[allow(unused_imports)]
 use crate::semantics::{Semantics, Signed, Unsigned};
 use crate::transfer::{Arith, DivRem, DivZero};
 use crate::word::*;
+#[allow(unused_imports)]
 use vstd::arithmetic::div_mod::*;
 use vstd::prelude::*;
 
@@ -140,7 +142,7 @@ impl<W: Word> Wrapped<W> {
     {
         match self.repr {
             Repr::Top=>true,
-            Repr::Arc{lo,hi}=>{
+            Repr::Arc{lo: _,hi: _}=>{
                 proof {self.missing();}
                 false
             }
@@ -398,7 +400,7 @@ impl<W: Word> Domain for Wrapped<W> {
                 let grown_size = dist(lo, hi).checked_add(span);
                 match grown_size {
                     None => { return Self::top(); },
-                    Some(n) => { proof { n.lemma_view_bounded(); } },
+                    Some(_n) => { proof { _n.lemma_view_bounded(); } },
                 }
                 if lo.eq(old_lo) {
                     proof { lemma_distance_advance(lo, hi, span); wrap_view::<W>(hi.view() as int + span.view() as int); }
@@ -474,8 +476,8 @@ impl<W: Word> Arith<Unsigned<W>> for Wrapped<W> {
                 let da=dist(a,b); let db=dist(c,d);
                 match da.checked_add(db) {
                     None => Self::top(),
-                    Some(span) => {
-                        proof {span.lemma_view_bounded();}
+                    Some(_span) => {
+                        proof {_span.lemma_view_bounded();}
                         let lo=word_add(a,c); let hi=word_add(b,d);
                         let r=Self::new(lo,hi);
                         proof {
@@ -570,6 +572,12 @@ impl<W: Word> Arith<Signed<W>> for Wrapped<W> {
 }
 
 impl<W:Word> Wrapped<W> {
+    /// Public specification of the exact `Never` portion of a division flag.
+    /// Signed and unsigned machine semantics use the same all-zero bit pattern.
+    pub open spec fn zero_flag_exact(d: &Self, flag: DivZero) -> bool {
+        (flag is Never) == !d.gamma(W::from_int(0))
+    }
+
     // Unsigned division only needs the north-pole (zero) split.  Keeping this
     // separate from the signed four-piece decomposition avoids unnecessary
     // half-circle cuts and reduces the unsigned cross product from 16 pieces
@@ -657,7 +665,7 @@ impl<W:Word> Wrapped<W> {
         let k:int=(if second {2int}else{0int})+(if x.view()<W::modulus()/2 {0int}else{1int});
         assert(self.piece_has(k,x));
     }
-    fn zero_flag(&self)->(r:DivZero)
+    pub fn zero_flag(&self)->(r:DivZero)
         requires self.wf(),
         ensures
             (r is Never)==(!self.gamma(Unsigned::<W>::zero())),
@@ -764,7 +772,7 @@ impl<W:Word> Wrapped<W> {
             return (fast,flag);
         }
 
-        // FAST-PATH: O(1) bypass for simple, strictly positive, non-wrapping intervals
+        // FAST-PATH: O(1) bypass for simple, nonnegative, non-wrapping intervals.
         proof { W::lemma_modulus(); }
         let half = W::half();
         if let (Repr::Arc { lo: a, hi: b }, Repr::Arc { lo: c, hi: d_hi }) = (self.repr, d.repr) {
@@ -880,8 +888,18 @@ impl<W:Word> DivRem<Unsigned<W>> for Wrapped<W> {
         let z=W::zero();proof {W::lemma_modulus();from_small::<W>(0);W::lemma_view_injective(z,Unsigned::<W>::zero());}
         self.contains(z)
     }
-    fn div(&self,d:&Self)->(r:(BotOr<Self>,DivZero)) {let r=self.divrem_impl(d,false,false);proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y) implies #[trigger] r.0.gamma(Unsigned::<W>::div(x,y)) by {assert(r.0.gamma(quotrem(false,false,x,y)));}} r}
-    fn rem(&self,d:&Self)->(r:(BotOr<Self>,DivZero)) {let r=self.divrem_impl(d,true,false);proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y) implies #[trigger] r.0.gamma(Unsigned::<W>::rem(x,y)) by {assert(r.0.gamma(quotrem(false,true,x,y)));}} r}
+    fn div(&self,d:&Self)->(r:(BotOr<Self>,DivZero))
+    {
+        let r=self.divrem_impl(d,false,false);
+        proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y) implies #[trigger] r.0.gamma(Unsigned::<W>::div(x,y)) by {assert(r.0.gamma(quotrem(false,false,x,y)));}}
+        r
+    }
+    fn rem(&self,d:&Self)->(r:(BotOr<Self>,DivZero))
+    {
+        let r=self.divrem_impl(d,true,false);
+        proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Unsigned::<W>::is_zero(y) implies #[trigger] r.0.gamma(Unsigned::<W>::rem(x,y)) by {assert(r.0.gamma(quotrem(false,true,x,y)));}}
+        r
+    }
 }
 
 spec fn uquotrem<W:Word>(rem:bool,x:W,y:W)->W {if rem {Unsigned::<W>::rem(x,y)}else{Unsigned::<W>::div(x,y)}}
@@ -979,12 +997,14 @@ spec fn quotrem<W:Word>(signed:bool,rem:bool,x:W,y:W)->W {
 }
 impl<W:Word> DivRem<Signed<W>> for Wrapped<W> {
     fn contains_zero(&self)->(r:bool) {<Self as DivRem<Unsigned<W>>>::contains_zero(self)}
-    fn div(&self,d:&Self)->(r:(BotOr<Self>,DivZero)) {
+    fn div(&self,d:&Self)->(r:(BotOr<Self>,DivZero))
+    {
         let r=self.divrem_impl(d,false,true);
         proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Signed::<W>::is_zero(y) implies #[trigger] r.0.gamma(Signed::<W>::div(x,y)) by {assert(r.0.gamma(quotrem(true,false,x,y)));}}
         r
     }
-    fn rem(&self,d:&Self)->(r:(BotOr<Self>,DivZero)) {
+    fn rem(&self,d:&Self)->(r:(BotOr<Self>,DivZero))
+    {
         let r=self.divrem_impl(d,true,true);
         proof {assert forall|x:W,y:W| self.gamma(x)&&d.gamma(y)&&!Signed::<W>::is_zero(y) implies #[trigger] r.0.gamma(Signed::<W>::rem(x,y)) by {assert(r.0.gamma(quotrem(true,true,x,y)));}}
         r

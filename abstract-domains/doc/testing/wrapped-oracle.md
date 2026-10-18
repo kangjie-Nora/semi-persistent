@@ -50,7 +50,7 @@ All enabled arithmetic transfers prove universal containment against gamma.
 
 Seven arithmetic tests exercise actual transfers: negation over every u8 arc,
 all u8 singleton pairs, 4,225 sampled abstract pairs with all concrete operand
-pairs, and boundaries at all four widths. Expected sets use Rust wrapping
+pairs, and boundaries at all five widths. Expected sets use Rust wrapping
 operations over independently enumerated input sets. They check exact sets,
 not only containment. These finite tests are not a universal exactness proof.
 
@@ -61,13 +61,13 @@ Maybe or Always zero. Only an all-zero divisor produces Bot. `contains_zero`
 is exact. Zero divisors are excluded from quotient/remainder computation and
 reported through the flag.
 
-Inputs split into up to four non-wrapping pieces at zero and the signed
-half-circle. Both the membership of each piece and coverage of the original
-input are proved. Unsigned pieces use the existing verified linear Interval
-transfers. Signed pieces convert to magnitude intervals, compute the unsigned
-operation, and restore the sign: quotient uses operand-sign XOR, remainder uses
-the dividend sign. MIN/-1 follows the shared wrapping semantics. The final
-result is a deterministic join of all piece-pair results.
+Unsigned division and remainder split only at the zero pole, yielding at most
+two pieces per operand. Signed operations use the signed half-circle split and
+then convert pieces to magnitude intervals; quotient uses operand-sign XOR and
+remainder uses the dividend sign. Non-wrapping signed inputs take a constant-time
+fast path; other signed inputs use the verified piece decomposition. MIN/-1
+follows the shared wrapping semantics. The final result is a deterministic join
+of all nonempty piece-pair results.
 
 The reuse of Interval remainder bounds and the final single-arc cover can add
 spurious values. Remainder is not claimed exact even for every singleton pair.
