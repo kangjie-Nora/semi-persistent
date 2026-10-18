@@ -51,7 +51,7 @@
               "engine": "ours",
               "arm": "encoded",
               "path": "fixtures/cyk-endpoints/cykjson/source-801/encoded.ours.egg",
-              "sha256": "8799bb7edff5a0b03f03551c7d068f13f9e14b0988b416a13b8c6f056c98efed",
+              "sha256": "f2eaf24a0d0f5396eb78af2aa922de75ec46f40ebbbc380349113bd0eea5982b",
               "expected": "pass"
             }
           ]
@@ -78,7 +78,7 @@
               "engine": "ours",
               "arm": "encoded",
               "path": "fixtures/cyk-endpoints/cykjson/validation-4/encoded.ours.egg",
-              "sha256": "ce43f0bec0771f60510ec60a78ee5f6b26a78f3e2a0fbd941e57b3e2e09a6a40",
+              "sha256": "54f46b35fb053062ae6038c3265874d58e3d64e7e9feaefb3c59c7423c25804d",
               "expected": "pass"
             }
           ]
@@ -111,7 +111,7 @@
               "engine": "ours",
               "arm": "encoded",
               "path": "fixtures/cyk-endpoints/cykjson/ambiguous-three/encoded.ours.egg",
-              "sha256": "a65769b4e99c1af5adb86810b5c7db0d2033371ae24ade589cf25de5327a3889",
+              "sha256": "2375cc6721941b37aaf6a45f5ee47408eebcf4d5d4bcff00543f608c3c19d3c3",
               "expected": "check_failure",
               "stderr_contains": [
                 "check failed: terms are equal"

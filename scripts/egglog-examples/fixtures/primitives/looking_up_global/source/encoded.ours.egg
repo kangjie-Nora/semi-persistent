@@ -7,6 +7,6 @@
 (rule ((= x (N n))) ((union (Known x) (Present))))
 (union (F) (N 0))
 (run 1)
-(check (= (Known (F)) (Present)))
+(prove (= (Known (F)) (Present)))
 (let x (F))
-(check (!= (Known (G)) (Present)))
+(prove (!= (Known (G)) (Present)))

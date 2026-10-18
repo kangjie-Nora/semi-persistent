@@ -11,6 +11,6 @@
 (constructor False () Bool)
 (let expr (Add (Sum (VCons (B (True)) (VCons (B (False)) (VNil)))) (B (True))))
 
-(check (= expr (Add (Sum (VCons (B (True)) (VCons (B (False)) (VNil)))) (B (True)))))
-(check (!= (VNil) (VCons (B (True)) (VNil))))
-(check (!= (VCons (B (True)) (VCons (B (False)) (VNil))) (VCons (B (False)) (VCons (B (True)) (VNil)))))
+(prove (= expr (Add (Sum (VCons (B (True)) (VCons (B (False)) (VNil)))) (B (True)))))
+(prove (!= (VNil) (VCons (B (True)) (VNil))))
+(prove (!= (VCons (B (True)) (VCons (B (False)) (VNil))) (VCons (B (False)) (VCons (B (True)) (VNil)))))

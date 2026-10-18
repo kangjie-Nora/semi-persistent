@@ -24,8 +24,8 @@
 (let au12 (AU e1 e2))
 
 (run 4)
-(check (= au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
+(prove (= au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
 (extract au12)
 
 ;; Supplemental negative control, after the full source workload.
-(check (= au12 (Num 3)))
+(prove (= au12 (Num 3)))

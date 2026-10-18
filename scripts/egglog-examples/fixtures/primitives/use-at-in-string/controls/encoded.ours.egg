@@ -4,5 +4,5 @@
 (union (MyRel "@hey") (Present))
 (extract "@hello")
 
-(check (= (MyRel "@hey") (Present)))
-(check (!= (MyRel "@missing") (Present)))
+(prove (= (MyRel "@hey") (Present)))
+(prove (!= (MyRel "@missing") (Present)))

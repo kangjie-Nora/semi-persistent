@@ -119,8 +119,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/proof-extract-cost/missing-equality/original.egglog.egg",
-              "sha256": "0bb7ad5a6611a2665423b38a78ee605962df898d73c4f363968f6729841b8856",
+              "path": "fixtures/constructors/proof-extract-cost/missing-equality/encoded.ours.egg",
+              "sha256": "c22b2ad8599d877d79f8807b5e4480c160a0dbd1fd0c26d43df90204eb5acec8",
               "expected": "check_failure",
               "stderr_contains": [
                 "check failed"
@@ -169,8 +169,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug2/upstream.egg",
-              "sha256": "620b93dc6f97856e42d9ad97f9fadeaa2eab17557aa3b950c2eb146a89a9fb2e",
+              "path": "fixtures/constructors/repro-querybug2/source/encoded.ours.egg",
+              "sha256": "5116bee5f7348d806151e087781d84a6a651ebe33f8d751bc1c186868722f71d",
               "expected": "pass"
             }
           ]
@@ -196,8 +196,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug2/literal-3/original.egglog.egg",
-              "sha256": "65d2278bb22d0730ea9ce3c11f27b21e224cb4645d3a79b95b6af581ed23d2ab",
+              "path": "fixtures/constructors/repro-querybug2/literal-3/encoded.ours.egg",
+              "sha256": "c73cf48533180e55136f362db9347cb5493c2f6f9260ec1cb6c170215a9b5d13",
               "expected": "pass"
             }
           ]
@@ -229,8 +229,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug2/unjustified-literal/original.egglog.egg",
-              "sha256": "57a46ef936143929daba88f5c65862f211b4fd8b61aa93d61b1c21c75e90e053",
+              "path": "fixtures/constructors/repro-querybug2/unjustified-literal/encoded.ours.egg",
+              "sha256": "553248c76d68d2fe07a3318d65d0967b900631fe019e218557a9ec9102943212",
               "expected": "check_failure",
               "stderr_contains": [
                 "check failed"
@@ -279,8 +279,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug4/upstream.egg",
-              "sha256": "d11399a3a425fbe39e6f09675f0623cef7d9df3cf63764fcf97c7b74dd607bea",
+              "path": "fixtures/constructors/repro-querybug4/source/encoded.ours.egg",
+              "sha256": "e2a3e1bdbc9841cc7883466400bf8b94bda120aee9a34e1b23fec6927bd300b3",
               "expected": "pass"
             }
           ]
@@ -306,8 +306,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug4/literal-3/original.egglog.egg",
-              "sha256": "e532b49a6c31675ad6569a28f97ed62819d583f9291f0e05cfd73d9995a95b58",
+              "path": "fixtures/constructors/repro-querybug4/literal-3/encoded.ours.egg",
+              "sha256": "fe51ccffbf19fcc11a3f93a7cc1ecc23b8db2ae6ed898a59ec183262597d0df8",
               "expected": "pass"
             }
           ]
@@ -339,8 +339,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-querybug4/unjustified-literal/original.egglog.egg",
-              "sha256": "53066532ea43cfad7f0fa0edd441cd382951bce972a887572a1593b6b4d733e3",
+              "path": "fixtures/constructors/repro-querybug4/unjustified-literal/encoded.ours.egg",
+              "sha256": "b5dd30b399d6bf7cfbead4a97cfc2f8e316515525a09de32a44a270de9aca55a",
               "expected": "check_failure",
               "stderr_contains": [
                 "check failed"
@@ -390,8 +390,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-silly-panic/source-with-oracle/encoded.egglog.egg",
-              "sha256": "2dd67dba1a24ef8ed8662312e3003a8a0bae879d7e7cc89a0634a40992c84d9c",
+              "path": "fixtures/constructors/repro-silly-panic/source-with-oracle/encoded.ours.egg",
+              "sha256": "9ebd800594f59336a074a947d8990314925c19f9f832582791bfc2f0cd100ef2",
               "expected": "pass"
             }
           ]
@@ -417,8 +417,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-silly-panic/nested/encoded.egglog.egg",
-              "sha256": "abf6958b571e588b772e44c58c1e19c0a122853bf7f794db821d8e6252e56ebe",
+              "path": "fixtures/constructors/repro-silly-panic/nested/encoded.ours.egg",
+              "sha256": "0f4be801261009470ac4081b106b65185f22a53180bf0512e3c8ccdecca7f786",
               "expected": "pass"
             }
           ]
@@ -450,8 +450,8 @@
             {
               "engine": "ours",
               "arm": "encoded",
-              "path": "fixtures/constructors/repro-silly-panic/pre-run/encoded.egglog.egg",
-              "sha256": "b523569c4cea7d06dfba57a524c556168310b060154254d3dddcd5ce3c5ce528",
+              "path": "fixtures/constructors/repro-silly-panic/pre-run/encoded.ours.egg",
+              "sha256": "1ef04230127ab7767b7a0597cfaf8f43da45dd0860eb92aa2a74d623d1e332e8",
               "expected": "check_failure",
               "stderr_contains": [
                 "check failed"

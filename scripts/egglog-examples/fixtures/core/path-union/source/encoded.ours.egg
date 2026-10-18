@@ -20,5 +20,5 @@
 (union (mk 3) (mk 5))
 
 (run 10)
-(check (= (Edge (mk 3) (mk 6)) (Present)))
-(check (= (Path (mk 1) (mk 6)) (Present)))
+(prove (= (Edge (mk 3) (mk 6)) (Present)))
+(prove (= (Path (mk 1) (mk 6)) (Present)))

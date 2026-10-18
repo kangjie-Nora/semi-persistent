@@ -49,6 +49,15 @@ supporting definitions; consult `adaptations` and `limitations` before
 interpreting a result. Git attributes preserve inherited trailing
 whitespace in these hashed fixtures.
 
+The semi-persistent programs use `prove` for their build-and-compare
+assertions. This preserves the observations encoded before `check`
+became a query that only matches existing terms. In particular, some
+absence checks rely on building a witness term before comparing its
+class. Egglog programs retain their original `check` syntax; programs
+that previously shared a file have separate copies where this spelling
+differs. This corpus exercises build-and-compare assertions. Query
+printing, match counts and lazy query completion need separate tests.
+
 The upstream files and derived fixtures retain egglog's
 [MIT license](LICENSE.egglog). The Python tooling uses the repository's
 Apache-2.0 license. Attribution comments on derived programs and a narrow
@@ -129,7 +138,7 @@ Elapsed times are watchdog diagnostics. This is a correctness corpus,
 not the project's Criterion performance harness.
 
 The [recorded validation](validation.json) identifies a fresh release
-build of semi-persistent at `c4b7cfb4db8a9b9b2076ebffa3ff96e1e559852f`
+build of semi-persistent at `9b51c72742fc459dbeed5ababc197e8a56130266`
 and the pinned egglog binary. All 554 processes matched their expected
 outcomes: 378 successful executions, 164 intended check failures and
 12 intended runtime failures, with no timeouts. The record includes the
