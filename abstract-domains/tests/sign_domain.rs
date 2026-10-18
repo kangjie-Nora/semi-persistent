@@ -41,6 +41,25 @@ fn fact_has(f: &FactsZ, x: i64) -> bool {
     IntervalZ::constant(z(x)).leq(&f.interval())
 }
 
+/// Every non-bottom Sign category is determined by whether it contains a
+/// negative value, zero, and a positive value.  The representatives -1, 0,
+/// and 1 therefore check exactness rather than only containment.
+fn assert_exact_sign(result: &Sign, expected: impl Fn(i128) -> bool, label: &str) {
+    for representative in [-1, 0, 1] {
+        assert_eq!(
+            result.contains(representative),
+            expected(representative),
+            "{label}: category for {representative}"
+        );
+    }
+}
+
+fn same_sign_category(value: i128, representative: i128) -> bool {
+    (value < 0) == (representative < 0)
+        && (value == 0) == (representative == 0)
+        && (value > 0) == (representative > 0)
+}
+
 #[test]
 fn lattice_is_exact_on_all_categories() {
     for a_kind in states() {
@@ -68,25 +87,91 @@ fn lattice_is_exact_on_all_categories() {
 }
 
 #[test]
-fn integer_transfers_contain_every_small_model_result() {
+fn integer_transfers_are_exact_on_all_categories() {
     for a_kind in states() {
         let a = Sign::from_kind(a_kind);
-        let neg = <Sign as Arith<Euclid>>::neg(&a);
+        let euclid_neg = <Sign as Arith<Euclid>>::neg(&a);
+        let trunc_neg = <Sign as Arith<Trunc>>::neg(&a);
         for x in members(&a) {
-            assert!(neg.contains(-x), "neg: {a_kind:?}, {x}");
+            assert!(euclid_neg.contains(-x), "euclid neg: {a_kind:?}, {x}");
+            assert!(trunc_neg.contains(-x), "trunc neg: {a_kind:?}, {x}");
         }
+        assert_exact_sign(
+            &euclid_neg,
+            |z| members(&a).any(|x| same_sign_category(-x, z)),
+            "euclid neg",
+        );
+        assert_exact_sign(
+            &trunc_neg,
+            |z| members(&a).any(|x| same_sign_category(-x, z)),
+            "trunc neg",
+        );
         for b_kind in states() {
             let b = Sign::from_kind(b_kind);
-            let add = <Sign as Arith<Euclid>>::add(&a, &b);
-            let sub = <Sign as Arith<Euclid>>::sub(&a, &b);
-            let mul = <Sign as Mul<Euclid>>::mul(&a, &b);
+            let euclid_add = <Sign as Arith<Euclid>>::add(&a, &b);
+            let euclid_sub = <Sign as Arith<Euclid>>::sub(&a, &b);
+            let euclid_mul = <Sign as Mul<Euclid>>::mul(&a, &b);
+            let trunc_add = <Sign as Arith<Trunc>>::add(&a, &b);
+            let trunc_sub = <Sign as Arith<Trunc>>::sub(&a, &b);
+            let trunc_mul = <Sign as Mul<Trunc>>::mul(&a, &b);
             for x in members(&a) {
                 for y in members(&b) {
-                    assert!(add.contains(x + y), "add: {a_kind:?}, {b_kind:?}, {x}, {y}");
-                    assert!(sub.contains(x - y), "sub: {a_kind:?}, {b_kind:?}, {x}, {y}");
-                    assert!(mul.contains(x * y), "mul: {a_kind:?}, {b_kind:?}, {x}, {y}");
+                    assert!(
+                        euclid_add.contains(x + y),
+                        "euclid add: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
+                    assert!(
+                        euclid_sub.contains(x - y),
+                        "euclid sub: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
+                    assert!(
+                        euclid_mul.contains(x * y),
+                        "euclid mul: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
+                    assert!(
+                        trunc_add.contains(x + y),
+                        "trunc add: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
+                    assert!(
+                        trunc_sub.contains(x - y),
+                        "trunc sub: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
+                    assert!(
+                        trunc_mul.contains(x * y),
+                        "trunc mul: {a_kind:?}, {b_kind:?}, {x}, {y}"
+                    );
                 }
             }
+            assert_exact_sign(
+                &euclid_add,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x + y, z))),
+                &format!("euclid add: {a_kind:?}, {b_kind:?}"),
+            );
+            assert_exact_sign(
+                &euclid_sub,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x - y, z))),
+                "euclid sub",
+            );
+            assert_exact_sign(
+                &euclid_mul,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x * y, z))),
+                "euclid mul",
+            );
+            assert_exact_sign(
+                &trunc_add,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x + y, z))),
+                "trunc add",
+            );
+            assert_exact_sign(
+                &trunc_sub,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x - y, z))),
+                "trunc sub",
+            );
+            assert_exact_sign(
+                &trunc_mul,
+                |z| members(&a).any(|x| members(&b).any(|y| same_sign_category(x * y, z))),
+                "trunc mul",
+            );
         }
     }
 }
@@ -101,6 +186,29 @@ fn division_flags_and_results_are_sound() {
             let (er, rf) = <Sign as DivRem<Euclid>>::rem(&a, &b);
             let (tq, tf) = <Sign as DivRem<Trunc>>::div(&a, &b);
             let (tr, tf_r) = <Sign as DivRem<Trunc>>::rem(&a, &b);
+            let expected_flag = match b_kind {
+                SignKind::Zero => "always",
+                SignKind::Neg | SignKind::Pos | SignKind::NonZero => "never",
+                SignKind::NonPos | SignKind::NonNeg | SignKind::Top => "maybe",
+            };
+            for flag in [&ef, &rf, &tf, &tf_r] {
+                assert!(
+                    matches!(
+                        (expected_flag, flag),
+                        (
+                            "always",
+                            semi_persistent_abstract_domains::transfer::DivZero::Always
+                        ) | (
+                            "never",
+                            semi_persistent_abstract_domains::transfer::DivZero::Never
+                        ) | (
+                            "maybe",
+                            semi_persistent_abstract_domains::transfer::DivZero::Maybe
+                        )
+                    ),
+                    "wrong DivZero flag for {b_kind:?}"
+                );
+            }
             if b.kind() == SignKind::Zero {
                 assert!(matches!(
                     (eq, er, tq, tr, ef, rf, tf, tf_r),

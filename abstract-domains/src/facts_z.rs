@@ -56,6 +56,7 @@ impl FactsZ {
     {
         self.itv.dup()
     }
+
 }
 
 impl Domain for FactsZ {

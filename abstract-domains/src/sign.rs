@@ -238,18 +238,16 @@ impl Refine for Sign {
         BotOr::Val(FactsZ::from_interval(self.interval_hull()))
     }
     fn refine(&self,f:&FactsZ)->(r:BotOr<Self>) {
-        let i=f.interval();
-        let ni=Self::from_kind(SignKind::Neg).interval_hull();
-        let zi=Self::from_kind(SignKind::Zero).interval_hull();
-        let pi=Self::from_kind(SignKind::Pos).interval_hull();
-        let nm=i.meet_exact(&ni);let zm=i.meet_exact(&zi);let pm=i.meet_exact(&pi);
+        // FactsZ exposes the three sign possibilities directly from its
+        // bounds.  Do not allocate three IBig interval hulls and meet them
+        // just to answer these predicates.
+        let (fact_neg, fact_zero, fact_pos) = f.interval().sign_possibilities();
         let(n,z,p)=self.kind.categories();
-        let r=Self::build(n && !matches!(nm,BotOr::Bot),z && !matches!(zm,BotOr::Bot),p && !matches!(pm,BotOr::Bot));
+        let r=Self::build(n && fact_neg,z && fact_zero,p && fact_pos);
         proof { assert forall|x:int| self.gamma(x)&&f.gamma(x) implies #[trigger] r.gamma(x) by {
-            assert(i.gamma(x));
-            if x<0 {assert(ni.gamma(x));assert(nm.gamma(x));}
-            if x==0 {assert(zi.gamma(x));assert(zm.gamma(x));}
-            if x>0 {assert(pi.gamma(x));assert(pm.gamma(x));}
+            if x<0 {assert(fact_neg);}
+            if x==0 {assert(fact_zero);}
+            if x>0 {assert(fact_pos);}
         } }
         r
     }
