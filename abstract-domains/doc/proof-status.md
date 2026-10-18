@@ -21,10 +21,7 @@ Enabled executable widths:
 - `d16` (`u16`)
 - `d32` (`u32`)
 - `d64` (`u64`)
-
-The `d128` macro invocation remains disabled because its bitvector obligations
-exceed the current solver capacity. Do not describe `u128` as an enabled or
-verified executable instance.
+- `u128` through the shared generic `Word` implementation
 
 The separate Rust mirror suite contains 32 tests:
 
@@ -43,7 +40,7 @@ implementation corresponds to the verified definitions.
 | L1 | bit primitives and infinite-bitstring natural operations | proved |
 | L2 | Tnum, Anum, Unum, and division theory | proved |
 | L3 | chopped bounded-width domains | every stated contract verifies; containment covers the explicit operation inventory in `design.md`, not every defined operation |
-| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval` at four enabled widths | every method verifies its stated contract; containment scope is listed below |
+| L4 | `ExecTnum`, `ExecAnum`, `ExecUnum`, `Interval` at the enabled machine widths | every method verifies its stated contract; containment scope is listed below |
 
 All enabled L4 results are proved well formed where their contracts say so.
 The current **universal containment** contracts are:
