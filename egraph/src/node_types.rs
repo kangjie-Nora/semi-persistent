@@ -20,7 +20,7 @@ use crate::containers::Tagged;
 /// Per-node control flags stored in the `flags` field.
 ///
 /// `FLAG_SUBSUMED` and `FLAG_AC_COLLAPSED` are deliberately distinct concepts (see
-/// `doc/design/ac-congruence-completeness.md` §6b):
+/// `doc/design/06-ac-congruence-closure.md` §6b):
 /// - `FLAG_SUBSUMED` — user-level `(subsume …)`: "do not *match* this node." The
 ///   matcher's indices skip it.
 /// - `FLAG_AC_COLLAPSED` — AC completion's inter-reduction: "do not use this node as a
@@ -29,11 +29,57 @@ use crate::containers::Tagged;
 ///   reduced form is in the same class — and stays a legal child of other nodes; only
 ///   AC completion's active rule set excludes it.
 ///
-/// A node may carry either, both, or neither. Completion's active set is the AC nodes
-/// with *neither* flag; the matcher's visible set is the nodes without `FLAG_SUBSUMED`.
+/// - `FLAG_CONGRUENT_DUP` — congruence closure: "this node's canonical form equals that
+///   of another member of its class which does not carry this flag." Purely
+///   representational, and the only flag no user action sets: recanonicalization can
+///   make an existing node's content coincide with another's, the hash-cons collision
+///   merges their classes, and the loser stays a member because the store never removes
+///   a node (ids are monotone, and the union-find, the use lists and the class ring all
+///   still reference it). A consumer that enumerates a class's members as *distinct
+///   alternatives* may therefore skip it without losing any content, choice, or cost: an
+///   identical unflagged twin is present by the invariant below. Skipping it is what makes
+///   a naive and a semi-naive round, which build such copies at different rates, report the
+///   same node counts and the same extraction search space.
+///
+///   The matcher is **not** such a consumer, and deliberately keeps it. The semi-naive
+///   delta index is built from the round's touched nodes; the node that recanonicalized
+///   onto its twin's content is touched while the twin usually is not, so skipping it would
+///   leave that content unrepresented in the delta and the variant would lose matches
+///   (pinned by `index::tests::congruent_dup_is_the_only_delta_representative` and the
+///   nested-growth property in `saturate::tests::prop`). This is a soundness requirement,
+///   not an optimisation choice: `doc/design/09-saturation.md` §9.2, "A soundness
+///   requirement on every index filter". Matching a duplicate only repeats its twin's bindings, which the match
+///   deduplication collapses, so keeping it costs work and changes no result.
+///
+/// A node may carry any combination. Completion's active set is the AC nodes with
+/// neither `FLAG_SUBSUMED` nor `FLAG_AC_COLLAPSED`; the matcher's visible set remains the
+/// nodes without `FLAG_SUBSUMED`; the dump and both extractors additionally skip
+/// `FLAG_CONGRUENT_DUP`.
+///
+/// **The `FLAG_CONGRUENT_DUP` invariant, and the one rule that maintains it.** Every
+/// content group within a class keeps at least one unflagged member, so skipping the
+/// flagged ones never empties a class (which extraction reports as infeasible rather
+/// than degrading, `extract.rs`). It is maintained by a single rule in `caches.rs`: a
+/// flagged node never has a hash-cons hint pushed for it. A collision probe therefore
+/// only ever returns an unflagged node, so the survivor of every collision is unflagged,
+/// and a chain of copies cannot flag its own last member. Because the rule lives at the
+/// one place the flag is set, no consumer's correctness depends on where that is.
 pub const FLAG_SUBSUMED: u8 = 1 << 0;
 pub const FLAG_CONSTRUCTOR: u8 = 1 << 1;
 pub const FLAG_AC_COLLAPSED: u8 = 1 << 2;
+pub const FLAG_CONGRUENT_DUP: u8 = 1 << 3;
+/// Node-level e-matching shield for a relevancy client: a node carrying this
+/// flag is skipped by the index build while the egraph's matching shield is
+/// active ([`EGraph::set_matching_shield`](crate::egraph::EGraph::set_matching_shield)),
+/// and indexed normally while it is inactive (a client's complete-model round
+/// must see every match). Unlike `FLAG_SUBSUMED` it is reversible
+/// ([`EGraph::set_node_matchable`](crate::egraph::EGraph::set_node_matchable)):
+/// a relevancy client shields a node at registration and clears the flag when
+/// the node becomes relevant. Stored in the node's flags byte, so it is captured
+/// by the semi-persistent node stores and rolls back on `restore`. It qualifies
+/// under the index filter's soundness requirement (`index.rs`): it makes the
+/// node's own content unmatchable, it does not depend on another node.
+pub const FLAG_UNMATCHABLE: u8 = 1 << 4;
 
 // ---------------------------------------------------------------------------
 // FixedArityNode<G, O, K>
@@ -128,7 +174,12 @@ impl<G: DenseId, O: DenseId, const K: usize> Tagged for FixedArityNode<G, O, K> 
     fn from_repr(stored: &Self) -> Self {
         let mut v = *stored;
         G::clear_tag(&mut v.global_id);
-        O::clear_tag(&mut v.op);
+        // The op's tag is the history bit (`has_history`), not the store's
+        // capture tag (that one lives on `global_id`). Clearing it here made
+        // every node read through the store report no history, so the
+        // "save on first recanonize" guard saved on every recanonize and a
+        // client could not tell a node with saved children from one without.
+        // Comparisons and hashing go through `op()`, which masks the bit.
         v
     }
     #[inline(always)]
@@ -246,7 +297,12 @@ impl<G: DenseId, O: DenseId> Tagged for VariableArityNode<G, O> {
     fn from_repr(stored: &Self) -> Self {
         let mut v = *stored;
         G::clear_tag(&mut v.global_id);
-        O::clear_tag(&mut v.op);
+        // The op's tag is the history bit (`has_history`), not the store's
+        // capture tag (that one lives on `global_id`). Clearing it here made
+        // every node read through the store report no history, so the
+        // "save on first recanonize" guard saved on every recanonize and a
+        // client could not tell a node with saved children from one without.
+        // Comparisons and hashing go through `op()`, which masks the bit.
         v
     }
     #[inline(always)]
@@ -346,7 +402,12 @@ impl<G: DenseId, O: DenseId, V: DenseId> Tagged for LitNode<G, O, V> {
     fn from_repr(stored: &Self) -> Self {
         let mut v = *stored;
         G::clear_tag(&mut v.global_id);
-        O::clear_tag(&mut v.op);
+        // The op's tag is the history bit (`has_history`), not the store's
+        // capture tag (that one lives on `global_id`). Clearing it here made
+        // every node read through the store report no history, so the
+        // "save on first recanonize" guard saved on every recanonize and a
+        // client could not tell a node with saved children from one without.
+        // Comparisons and hashing go through `op()`, which masks the bit.
         v
     }
     #[inline(always)]
@@ -487,10 +548,12 @@ mod tests {
         assert!(stored.has_history()); // op MSB
         assert!(N::tag(&stored)); // global_id MSB
 
-        // from_repr clears capture tag but op tag is also cleared (both use MSB)
-        // The clean node has neither flag — that's correct.
-        // In practice, has_history is only read on raw stored values from VecI::get.
+        // from_repr clears the store's capture tag (global_id MSB) and keeps
+        // the history bit (op MSB): stores return values through from_repr,
+        // so a history bit cleared here could never be read back.
         let clean = N::from_repr(&stored);
+        assert!(clean.has_history());
+        assert!(!N::tag(&clean));
         assert_eq!(clean.op(), OpId::new(3));
         assert_eq!(clean.global_id(), ENodeId::new(10));
         assert_eq!(clean.children, [ENodeId::new(7)]);

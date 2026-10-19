@@ -140,7 +140,7 @@ translation decision.
 
 `addac-sweep.md` reports the add-ac width-scaling sweep that answers part (b)
 of the convergence target in
-`egraph/doc/design/20-index-selectivity-and-delta-suffixes.md`: the
+`egraph/doc/design/08-indexes-and-leapfrog.md` §8.3: the
 `math-add-ac` block generalized to sum width n = 7..20, three configurations
 per width. `scripts/egglog-compare/gen-addac-sweep.py` writes those programs
 and `records/addac-sweep.csv` holds the per-run values. Native AC holds at 4n - 3 nodes and one iteration
@@ -157,7 +157,7 @@ the numbers do and do not establish (section 8's asymptotic reading is
 retracted there).
 
 The index-build and matching-throughput measurements are consolidated in
-`egraph/doc/design/20-index-selectivity-and-delta-suffixes.md`; container-level
+`egraph/doc/design/08-indexes-and-leapfrog.md` §8.3; container-level
 costs and invariants are in `containers-verus/doc/design/15-dense-span-map.md`.
 
 Read the ledgers before the numbers. `math-microbenchmark.deviations.md` in
@@ -292,3 +292,11 @@ egglog's own performance suite (`scripts/bench.py`) is lattice, container and
 schedule workloads outside the intersection; the comparison covers the eqsat
 core of their test corpus, not their headline benchmarks, and conversely
 those workloads exercise machinery we do not implement.
+
+## Additional finite example corpus
+
+The [egglog example corpus](../../scripts/egglog-examples/README.md) provides
+33 additional finite-example ports or encodings with source provenance,
+selected validation controls, and a portable runner. It is separate from
+the 17 registered performance families; example-file counts do not
+increase the benchmark-family count.

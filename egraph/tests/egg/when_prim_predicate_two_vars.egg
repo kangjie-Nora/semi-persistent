@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; The variable-ordering shape: a guard comparing two labels bound by the same pattern,
@@ -10,5 +12,5 @@
 (P (Num 1) (Num 4))
 (P (Num 9) (Num 2))
 (run 3)
-(check (= (Lo (Num 1)) (Hi (Num 4))))
-(check (!= (Lo (Num 9)) (Hi (Num 2))))
+(prove (= (Lo (Num 1)) (Hi (Num 4))))
+(prove (!= (Lo (Num 9)) (Hi (Num 2))))

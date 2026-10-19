@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; Two patterns constrained to one e-class, which is what a guard on an equality between
@@ -12,11 +14,11 @@
 (let q (Nrows (Num 20)))
 (union p q)
 (run 3)
-(check (= (Ok (Num 10) (Num 20)) (Num 1)))
+(prove (= (Ok (Num 10) (Num 20)) (Num 1)))
 
 ;; Not unioned: both terms exist, their classes differ, and the join finds nothing. Without
 ;; the shared root the two patterns would be a cross product and this would fire.
 (let r (Ncols (Num 30)))
 (let s (Nrows (Num 40)))
 (run 3)
-(check (!= (Ok (Num 30) (Num 40)) (Num 1)))
+(prove (!= (Ok (Num 30) (Num 40)) (Num 1)))

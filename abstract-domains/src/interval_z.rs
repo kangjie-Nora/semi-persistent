@@ -181,6 +181,103 @@ impl IntervalZ {
         IntervalZ { lo: Lo::Fin(dup_ibig(&c)), hi: Hi::Fin(c) }
     }
 
+    /// Whether this interval can contain a negative value, zero, or a
+    /// positive value.  This is used by FactsZ clients to refine Sign directly
+    /// from the interval bounds without constructing temporary IBig hulls.
+    pub fn sign_possibilities(&self) -> (r: (bool, bool, bool))
+        requires
+            self.wf(),
+        ensures
+            forall|x: int| #[trigger] self.gamma(x) && x < 0 ==> r.0,
+            forall|x: int| #[trigger] self.gamma(x) && x == 0 ==> r.1,
+            forall|x: int| #[trigger] self.gamma(x) && x > 0 ==> r.2,
+    {
+        let zero = IBig::from_i64(0);
+        let negative = match &self.lo {
+            Lo::NegInf => true,
+            Lo::Fin(lo) => !zero.le(lo),
+        };
+        let zero_possible = match (&self.lo, &self.hi) {
+            (Lo::NegInf, Hi::PosInf) => true,
+            (Lo::NegInf, Hi::Fin(hi)) => zero.le(hi),
+            (Lo::Fin(lo), Hi::PosInf) => lo.le(&zero),
+            (Lo::Fin(lo), Hi::Fin(hi)) => lo.le(&zero) && zero.le(hi),
+        };
+        let positive = match &self.hi {
+            Hi::PosInf => true,
+            Hi::Fin(hi) => !hi.le(&zero),
+        };
+        proof {
+            assert forall|x: int| #[trigger] self.gamma(x) && x < 0 implies negative by {
+                match &self.lo {
+                    Lo::NegInf => {},
+                    Lo::Fin(lo) => {
+                        assert(lo.view() <= x);
+                        assert(!(0int <= lo.view()));
+                    },
+                }
+            }
+            assert forall|x: int| #[trigger] self.gamma(x) && x == 0 implies zero_possible by {
+                match (&self.lo, &self.hi) {
+                    (Lo::NegInf, Hi::PosInf) => {},
+                    (Lo::NegInf, Hi::Fin(hi)) => { assert(0int <= hi.view()); },
+                    (Lo::Fin(lo), Hi::PosInf) => { assert(lo.view() <= 0int); },
+                    (Lo::Fin(lo), Hi::Fin(hi)) => {
+                        assert(lo.view() <= 0int);
+                        assert(0int <= hi.view());
+                    },
+                }
+            }
+            assert forall|x: int| #[trigger] self.gamma(x) && x > 0 implies positive by {
+                match &self.hi {
+                    Hi::PosInf => {},
+                    Hi::Fin(hi) => {
+                        assert(x <= hi.view());
+                        assert(!(hi.view() <= 0int));
+                    },
+                }
+            }
+        }
+        (negative, zero_possible, positive)
+    }
+
+    /// The intersection, exactly: an interval meet loses nothing.
+    pub fn meet_exact(&self, o: &Self) -> (r: BotOr<Self>)
+        requires
+            self.wf(),
+            o.wf(),
+        ensures
+            r.wf(),
+            forall|c: int| #[trigger] r.gamma(c) == (self.gamma(c) && o.gamma(c)),
+    {
+        let lo = if lo_le(&self.lo, &o.lo) {
+            dup_lo(&o.lo)
+        } else {
+            dup_lo(&self.lo)
+        };
+        let hi = if hi_le(&self.hi, &o.hi) {
+            dup_hi(&self.hi)
+        } else {
+            dup_hi(&o.hi)
+        };
+        let ok = match (&lo, &hi) {
+            (Lo::Fin(a), Hi::Fin(b)) => a.le(b),
+            _ => true,
+        };
+        if ok {
+            BotOr::Val(IntervalZ { lo, hi })
+        } else {
+            proof {
+                assert forall|c: int| #[trigger] self.gamma(c) implies !o.gamma(c) by {
+                    if self.gamma(c) && o.gamma(c) {
+                        assert(lo_ok(lo, c) && hi_ok(hi, c));
+                    }
+                }
+            }
+            BotOr::Bot
+        }
+    }
+
     fn add_int(&self, o: &Self) -> (r: Self)
         requires
             self.wf(),
@@ -301,6 +398,81 @@ impl Domain for IntervalZ {
         lo_ok(self.lo(), c) && hi_ok(self.hi(), c)
     }
 
+    fn dup(&self) -> (r: Self) {
+        IntervalZ { lo: dup_lo(&self.lo), hi: dup_hi(&self.hi) }
+    }
+
+    fn top() -> (r: Self) {
+        IntervalZ { lo: Lo::NegInf, hi: Hi::PosInf }
+    }
+
+    fn leq(&self, o: &Self) -> (b: bool) {
+        lo_le(&o.lo, &self.lo) && hi_le(&self.hi, &o.hi)
+    }
+
+    fn join(&self, o: &Self) -> (r: Self) {
+        let lo = if lo_le(&self.lo, &o.lo) {
+            dup_lo(&self.lo)
+        } else {
+            dup_lo(&o.lo)
+        };
+        let hi = if hi_le(&self.hi, &o.hi) {
+            dup_hi(&o.hi)
+        } else {
+            dup_hi(&self.hi)
+        };
+        IntervalZ { lo, hi }
+    }
+
+    // Duplicates `meet_exact`: calling it from here would make the impl
+    // depend on a function whose contract mentions the impl (a Verus cycle).
+    fn meet(&self, o: &Self) -> (r: BotOr<Self>)
+    {
+        let lo = if lo_le(&self.lo, &o.lo) {
+            dup_lo(&o.lo)
+        } else {
+            dup_lo(&self.lo)
+        };
+        let hi = if hi_le(&self.hi, &o.hi) {
+            dup_hi(&self.hi)
+        } else {
+            dup_hi(&o.hi)
+        };
+        let ok = match (&lo, &hi) {
+            (Lo::Fin(a), Hi::Fin(b)) => a.le(b),
+            _ => true,
+        };
+        if ok {
+            BotOr::Val(IntervalZ { lo, hi })
+        } else {
+            proof {
+                assert forall|c: int| #[trigger] self.gamma(c) implies !o.gamma(c) by {
+                    if self.gamma(c) && o.gamma(c) {
+                        assert(lo_ok(lo, c) && hi_ok(hi, c));
+                    }
+                }
+            }
+            BotOr::Bot
+        }
+    }
+
+    /// Cousot-Cousot widening: an unstable bound jumps to infinity.
+    fn widen(&self, o: &Self) -> (r: Self) {
+        let lo = if lo_le(&self.lo, &o.lo) {
+            dup_lo(&self.lo)
+        } else {
+            Lo::NegInf
+        };
+        let hi = if hi_le(&o.hi, &self.hi) {
+            dup_hi(&self.hi)
+        } else {
+            Hi::PosInf
+        };
+        IntervalZ { lo, hi }
+    }
+}
+
+impl Canonical for IntervalZ {
     proof fn lemma_nonempty(&self) {
         match (self.lo, self.hi) {
             (Lo::Fin(a), _) => assert(self.gamma(a.view())),
@@ -373,76 +545,6 @@ impl Domain for IntervalZ {
             },
             _ => {},
         }
-    }
-
-    fn dup(&self) -> (r: Self) {
-        IntervalZ { lo: dup_lo(&self.lo), hi: dup_hi(&self.hi) }
-    }
-
-    fn top() -> (r: Self) {
-        IntervalZ { lo: Lo::NegInf, hi: Hi::PosInf }
-    }
-
-    fn leq(&self, o: &Self) -> (b: bool) {
-        lo_le(&o.lo, &self.lo) && hi_le(&self.hi, &o.hi)
-    }
-
-    fn join(&self, o: &Self) -> (r: Self) {
-        let lo = if lo_le(&self.lo, &o.lo) {
-            dup_lo(&self.lo)
-        } else {
-            dup_lo(&o.lo)
-        };
-        let hi = if hi_le(&self.hi, &o.hi) {
-            dup_hi(&o.hi)
-        } else {
-            dup_hi(&self.hi)
-        };
-        IntervalZ { lo, hi }
-    }
-
-    fn meet(&self, o: &Self) -> (r: BotOr<Self>) {
-        let lo = if lo_le(&self.lo, &o.lo) {
-            dup_lo(&o.lo)
-        } else {
-            dup_lo(&self.lo)
-        };
-        let hi = if hi_le(&self.hi, &o.hi) {
-            dup_hi(&self.hi)
-        } else {
-            dup_hi(&o.hi)
-        };
-        let ok = match (&lo, &hi) {
-            (Lo::Fin(a), Hi::Fin(b)) => a.le(b),
-            _ => true,
-        };
-        if ok {
-            BotOr::Val(IntervalZ { lo, hi })
-        } else {
-            proof {
-                assert forall|c: int| #[trigger] self.gamma(c) implies !o.gamma(c) by {
-                    if self.gamma(c) && o.gamma(c) {
-                        assert(lo_ok(lo, c) && hi_ok(hi, c));
-                    }
-                }
-            }
-            BotOr::Bot
-        }
-    }
-
-    /// Cousot-Cousot widening: an unstable bound jumps to infinity.
-    fn widen(&self, o: &Self) -> (r: Self) {
-        let lo = if lo_le(&self.lo, &o.lo) {
-            dup_lo(&self.lo)
-        } else {
-            Lo::NegInf
-        };
-        let hi = if hi_le(&o.hi, &self.hi) {
-            dup_hi(&self.hi)
-        } else {
-            Hi::PosInf
-        };
-        IntervalZ { lo, hi }
     }
 }
 

@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; EVAL: both
 ;; Declared AC laws are enforced while terms are constructed.
@@ -10,5 +12,5 @@
 (function Add (Math) Math :assoc-comm)
 
 (let nested (Add a (Add b c)))
-(check (= nested (Add c a b)))
+(prove (= nested (Add c a b)))
 ;; ANCHOR_END: ac-canonization

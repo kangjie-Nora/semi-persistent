@@ -68,6 +68,9 @@ pub enum CTerm<O, S, L> {
     },
     /// Reference to a let-bound global. Resolved at interpret time.
     Global(String, S),
+    /// A child of a variadic application with its multiplicity, at least 1. Appears
+    /// only in an `App`'s children (`check_term` rejects it anywhere else).
+    Counted(Box<CTerm<O, S, L>>, num_bigint::BigUint),
 }
 
 /// Fully resolved command — ready for interpretation.
@@ -81,7 +84,34 @@ pub enum CCommand<O, S, L> {
     Check(CTerm<O, S, L>),
     CheckEq(CTerm<O, S, L>, CTerm<O, S, L>),
     CheckNeq(CTerm<O, S, L>, CTerm<O, S, L>),
+    /// `(check fact ...)`: egglog's check, a query over the current e-graph that
+    /// succeeds when it has a match. It builds nothing.
+    CheckQuery(Box<CheckQuery<O, S, L>>),
+    /// `(run N :until fact ...)`: the run stops before a round once `goal` holds.
+    RunUntil {
+        ruleset: Option<crate::apply::RulesetId>,
+        limit: u64,
+        goal: Box<CheckQuery<O, S, L>>,
+    },
     Extract(CTerm<O, S, L>),
+    /// `(extract t :cost NAME …)`, with the model compiled at check time.
+    ExtractWith {
+        term: CTerm<O, S, L>,
+        model: crate::cost_models::Handle,
+        rung: String,
+        budget: Option<u64>,
+        solver: crate::ast::SolverSpec,
+        file: Option<String>,
+        proof: Option<String>,
+        band: Option<(u64, u64, u64)>,
+    },
+    /// A collection rule, installed when it executes.
+    CollectionRule(std::sync::Arc<crate::collection::Rule<O, S, L>>),
+    /// `(dump-egraph t :file path)`.
+    DumpEGraph {
+        root: CTerm<O, S, L>,
+        file: String,
+    },
     Rewrite {
         query: ResolvedQuery<O, S, L>,
         rhs_locals: crate::resolve::RhsLocalShape,
@@ -129,6 +159,95 @@ pub enum CCommand<O, S, L> {
     Pop,
 }
 
+/// A sort-checked `(check fact ...)`.
+#[derive(Clone, Debug)]
+pub struct CheckQuery<O, S, L> {
+    /// The facts that need matching; `None` when every fact is one of `global_eqs`.
+    pub query: Option<ResolvedQuery<O, S, L>>,
+    /// Facts `(= x y)` between two globals. No pattern binds either side, so they are
+    /// compared on the globals' classes rather than matched.
+    pub global_eqs: Vec<(String, String)>,
+    /// The facts as written, for the failure message.
+    pub text: String,
+    /// Questionable names found by the sort check, printed when the command runs.
+    pub warnings: Vec<String>,
+    /// For a check of one fact `(= p q)` over ground terms or globals: each side's class.
+    /// Lazy AC mode decides the pair as `prove` does, with the pair as the completion goal.
+    pub pair: Option<[PairSide<O, S, L>; 2]>,
+    /// What the check requires of its matches.
+    pub cond: crate::surface_ast::CheckCond,
+    /// The check's named variables in `query`, with their names: matches are counted
+    /// as distinct assignments of these, so the variables flattening introduces do not
+    /// count.
+    pub vars: Vec<VarId>,
+    pub var_names: Vec<String>,
+    /// `(query ...)`: print up to this many matches instead of requiring `cond`.
+    pub print: Option<u64>,
+}
+
+/// One side of a ground `(= p q)` check.
+#[derive(Clone, Debug)]
+pub enum PairSide<O, S, L> {
+    /// A global: its class.
+    Global(String),
+    /// A ground term: a query for it, and the variable holding its root class.
+    Term(Box<ResolvedQuery<O, S, L>>, VarId),
+}
+
+/// Every occurrence of a name in check facts: pattern variables with their spans, and
+/// whether the occurrence is a bare side of a top-level `(= v p)`. Rest, sequence and
+/// filter names count as variables but are not reported.
+fn fact_names(facts: &[SurfacePattern]) -> (Vec<(String, Span, bool)>, bool) {
+    fn walk(
+        p: &SurfacePattern,
+        binder: bool,
+        out: &mut Vec<(String, Span, bool)>,
+        rest: &mut bool,
+    ) {
+        match p {
+            SurfacePattern::Var(v, sp) => out.push((v.clone(), *sp, binder)),
+            SurfacePattern::Lit(..) => {}
+            SurfacePattern::App {
+                prefix,
+                children,
+                suffix,
+                ..
+            } => {
+                *rest |= prefix.is_some() || suffix.is_some();
+                for c in children {
+                    match c {
+                        SurfacePatChild::Elem(q) | SurfacePatChild::ElemMult(q, _) => {
+                            walk(q, false, out, rest)
+                        }
+                        SurfacePatChild::Seq(..) => *rest = true,
+                        SurfacePatChild::Filter { base, .. } => {
+                            *rest = true;
+                            walk(base, false, out, rest)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut rest = false;
+    for f in facts {
+        match f {
+            SurfacePattern::App { op, children, .. } if op == EQ_FORM => {
+                for c in children {
+                    if let SurfacePatChild::Elem(q) = c {
+                        walk(q, true, &mut out, &mut rest);
+                    } else if let SurfacePatChild::ElemMult(q, _) = c {
+                        walk(q, false, &mut out, &mut rest);
+                    }
+                }
+            }
+            _ => walk(f, false, &mut out, &mut rest),
+        }
+    }
+    (out, rest)
+}
+
 /// A sort-checked `:until` goal: the two ground terms, and whether the run stops when their
 /// classes are equal or when they are distinct.
 #[derive(Clone, Debug)]
@@ -145,6 +264,11 @@ pub struct CGoal<O, S, L> {
 #[derive(Debug, Default)]
 struct RulesetTable {
     names: Vec<String>,
+    /// Cost models by name, compiled when declared. Static like rulesets, and for
+    /// the same reason kept in this table: both are names a later command refers to.
+    cost_models: std::collections::BTreeMap<String, crate::cost_models::Handle>,
+    /// Collection rules checked so far, for their generated names.
+    collection_rules: usize,
 }
 
 impl RulesetTable {
@@ -198,6 +322,10 @@ where
     M: LitModel<Value = L>,
 {
     match term {
+        Term::Counted { span, .. } => Err(serr(
+            "a multiplicity `:k` is written on a child of a variadic application".to_string(),
+            *span,
+        )),
         Term::Lit(tok, span) => {
             // Global name?
             if let Some((_gid, sort, _)) = globals.get(tok.as_str()) {
@@ -306,7 +434,36 @@ where
             let mut checked = Vec::with_capacity(children.len());
             for (i, child) in children.iter().enumerate() {
                 let child_sort = child_sort_hint(&info.kind, i);
-                let ct = check_term(child, child_sort, ops, sorts, model, globals)?;
+                let ct = match child {
+                    Term::Counted { term, count, span } => {
+                        // An ACI operator stores a set, which has no multiplicities: a count
+                        // there would be silently discarded, so it is refused, as it is in a
+                        // pattern.
+                        if matches!(info.kind, OpKind::Set { .. }) {
+                            return Err(serr(set_count_message(op), *span));
+                        }
+                        if !matches!(info.kind, OpKind::A { .. } | OpKind::MSet { .. }) {
+                            return Err(serr(
+                                format!(
+                                    "operator '{op}' is not variadic: a child cannot carry a \
+                                     multiplicity"
+                                ),
+                                *span,
+                            ));
+                        }
+                        if num_traits::Zero::is_zero(count) {
+                            return Err(serr(
+                                "a ground multiplicity is at least 1".to_string(),
+                                *span,
+                            ));
+                        }
+                        CTerm::Counted(
+                            Box::new(check_term(term, child_sort, ops, sorts, model, globals)?),
+                            count.clone(),
+                        )
+                    }
+                    _ => check_term(child, child_sort, ops, sorts, model, globals)?,
+                };
                 // Verify child sort matches expected
                 if let Some(expected_sort) = child_sort {
                     let actual = cterm_sort(&ct);
@@ -350,6 +507,7 @@ fn cterm_sort<O, S: Copy, L>(ct: &CTerm<O, S, L>) -> S {
     match ct {
         CTerm::Lit(_, s) | CTerm::Global(_, s) => *s,
         CTerm::App { sort, .. } => *sort,
+        CTerm::Counted(t, _) => cterm_sort(t),
     }
 }
 
@@ -363,6 +521,8 @@ use crate::surface_ast::{SurfaceCommand, SurfacePatChild, SurfacePattern};
 /// Reserved rather than looked up: a declaration named `=` would otherwise shadow the
 /// form and silently change what every existing `(= …)` in a rule body means.
 pub const EQ_FORM: &str = "=";
+/// The disequality form of rule bodies and checks, `(!= p q)`.
+pub const NEQ_FORM: &str = "!=";
 
 /// Flatten surface patterns directly to `FlatQuery`, skipping `Pattern`.
 pub fn flatten_surface<O, S, const TRACK: bool>(
@@ -412,6 +572,29 @@ where
     /// guard, which is a constraint rather than a subterm and so has no meaningful
     /// nested reading.
     fn flatten_root(&mut self, pat: &SurfacePattern) -> Result<String, String> {
+        // `(!= p q)` with an e-class pattern on a side is a class disequality, not a
+        // guard: a guard reads literal values, and `p` names a class. So are two bare
+        // variables when no literal sort declares a primitive `!=`; when one does, they
+        // are decided at resolve time, once their sorts are known.
+        if let SurfacePattern::App { op, children, .. } = pat
+            && op == NEQ_FORM
+            && let [SurfacePatChild::Elem(a), SurfacePatChild::Elem(b)] = children.as_slice()
+            && ([a, b].iter().any(|p| match p {
+                SurfacePattern::App { op, .. } => self
+                    .ops
+                    .id_by_name(op)
+                    .is_none_or(|id| !self.ops.is_prim_op(id)),
+                _ => false,
+            }) || self
+                .ops
+                .id_by_name(NEQ_FORM)
+                .is_none_or(|id| !self.ops.is_prim_op(id)))
+        {
+            let ra = self.flatten_child(a)?;
+            let rb = self.flatten_child(b)?;
+            self.atoms.push(Atom::Neq(ra, rb));
+            return Ok(self.fresh("neq"));
+        }
         if let SurfacePattern::App { op, .. } = pat
             && op != EQ_FORM
             && let Some(op_id) = self.ops.id_by_name(op)
@@ -487,6 +670,9 @@ where
                 SurfacePatChild::ElemMult(..) => {
                     return Err(format!("'{op}' takes no multiplicities"));
                 }
+                SurfacePatChild::Seq(..) | SurfacePatChild::Filter { .. } => {
+                    return Err(format!("'{op}' takes no sequence patterns"));
+                }
             }
         }
         let b = sides.pop().unwrap();
@@ -531,6 +717,11 @@ where
                         SurfacePatChild::ElemMult(..) => {
                             return Err(format!("guard operator '{op}' takes no multiplicities"));
                         }
+                        SurfacePatChild::Seq(..) | SurfacePatChild::Filter { .. } => {
+                            return Err(format!(
+                                "guard operator '{op}' takes no sequence patterns"
+                            ));
+                        }
                     }
                 }
                 Ok(PredExpr::App {
@@ -549,6 +740,9 @@ where
             .map(|c| match c {
                 SurfacePatChild::Elem(p) => self.flatten_child(p),
                 SurfacePatChild::ElemMult(_, _) => unreachable!("mults already rejected"),
+                SurfacePatChild::Seq(..) | SurfacePatChild::Filter { .. } => {
+                    unreachable!("sequence patterns already rejected")
+                }
             })
             .collect()
     }
@@ -564,6 +758,9 @@ where
                 SurfacePatChild::Elem(p) => Ok((self.flatten_child(p)?, FlatMult::Exact(1))),
                 SurfacePatChild::ElemMult(p, m) => {
                     Ok((self.flatten_child(p)?, flatten_mult_spec(m)))
+                }
+                SurfacePatChild::Seq(..) | SurfacePatChild::Filter { .. } => {
+                    unreachable!("sequence patterns already rejected")
                 }
             })
             .collect()
@@ -586,6 +783,12 @@ where
         else {
             unreachable!()
         };
+        if children.iter().any(SurfacePatChild::is_sequence) {
+            return Err(format!(
+                "a sequence pattern under '{op}' (`..name` between children, or `(..name pattern)`) \
+                 is only allowed in the left-hand side of a rewrite"
+            ));
+        }
         let has_mult = Self::has_mult(children);
 
         let op_id = self
@@ -781,6 +984,14 @@ where
     }
 }
 
+/// The refusal of a count under an ACI operator, in a ground term or a right-hand side.
+pub(crate) fn set_count_message(op: &str) -> String {
+    format!(
+        "operator '{op}' is ACI (set); multiplicities not allowed (use AC): a set holds each \
+         element once"
+    )
+}
+
 fn flatten_mult_spec(m: &MultSpec) -> FlatMult {
     match m {
         MultSpec::Exact(n) => FlatMult::Exact(*n),
@@ -847,11 +1058,201 @@ where
 {
     match cmd {
         SurfaceCommand::Pass(c) => sortcheck_pass(c, eg, model, globals, rulesets),
+        SurfaceCommand::RunUntil {
+            ruleset,
+            limit,
+            facts,
+            text,
+        } => {
+            let rid = rulesets.resolve(&ruleset)?;
+            let check = SurfaceCommand::Check {
+                facts,
+                text,
+                cond: crate::surface_ast::CheckCond::Exists,
+                print: None,
+            };
+            match sortcheck_one(check, eg, model, globals, rulesets)? {
+                CCommand::CheckQuery(goal) => Ok(CCommand::RunUntil {
+                    ruleset: rid,
+                    limit,
+                    goal,
+                }),
+                _ => unreachable!("a check lowers to CheckQuery"),
+            }
+        }
+        SurfaceCommand::Check {
+            facts,
+            text,
+            cond,
+            print,
+        } => {
+            let span = facts.first().map_or(Span::Dummy, |p| p.span());
+            // Names resolve as in rule bodies: a global is the global, and any other
+            // name is a variable of this one query. egglog rejects a variable named
+            // like a function or sort (`Shadowing`); here that also catches a nullary
+            // operator written without its parentheses.
+            let (names, has_rest) = fact_names(&facts);
+            let mut free: Vec<(String, Span, bool)> = Vec::new();
+            for (name, sp, binder) in &names {
+                if globals.get(name.as_str()).is_some() {
+                    continue;
+                }
+                if eg.ops().id_by_name(name).is_some() {
+                    return Err(serr(
+                        format!(
+                            "`{name}` names an operator, not a check variable; a nullary \
+                             term is written `({name})`"
+                        ),
+                        *sp,
+                    ));
+                }
+                if eg.sorts().id_by_name(name).is_some() {
+                    return Err(serr(
+                        format!("`{name}` names a sort, not a check variable"),
+                        *sp,
+                    ));
+                }
+                free.push((name.clone(), *sp, *binder));
+            }
+            let mut warnings = Vec::new();
+            let mut seen: Vec<&str> = Vec::new();
+            for (name, _, binder) in &free {
+                if seen.contains(&name.as_str()) {
+                    continue;
+                }
+                seen.push(name);
+                let n = free.iter().filter(|(m, _, _)| m == name).count();
+                if n == 1 && !*binder && !name.starts_with('_') {
+                    warnings.push(format!(
+                        "check: `{name}` occurs once, so it matches any e-class; no global \
+                         of that name is defined (write `_{name}` for a wildcard)"
+                    ));
+                }
+            }
+            let is_global = |p: &SurfacePattern| matches!(p, SurfacePattern::Var(v, _) if globals.get(v.as_str()).is_some());
+            let eq_sides = |p: &SurfacePattern| -> Option<[SurfacePattern; 2]> {
+                match p {
+                    SurfacePattern::App { op, children, .. } if op == EQ_FORM => {
+                        match children.as_slice() {
+                            [SurfacePatChild::Elem(a), SurfacePatChild::Elem(b)] => {
+                                Some([a.clone(), b.clone()])
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            };
+            let mut global_eqs = Vec::new();
+            let mut matched = Vec::new();
+            for f in &facts {
+                match (f, eq_sides(f)) {
+                    (_, Some([SurfacePattern::Var(a, _), SurfacePattern::Var(b, _)]))
+                        if globals.get(a.as_str()).is_some()
+                            && globals.get(b.as_str()).is_some() =>
+                    {
+                        global_eqs.push((a.clone(), b.clone()));
+                    }
+                    // A bare global holds: its class exists.
+                    (SurfacePattern::Var(..), _) if is_global(f) => {}
+                    (SurfacePattern::Var(v, sp), _) => {
+                        return Err(serr(
+                            format!(
+                                "a check fact is a pattern or `(= p q)`; `{v}` alone matches \
+                                 every e-class"
+                            ),
+                            *sp,
+                        ));
+                    }
+                    _ => matched.push(f.clone()),
+                }
+            }
+            let query = if matched.is_empty() {
+                None
+            } else {
+                let fq = flatten_surface(&matched, eg.ops()).map_err(|e| serr(e, span))?;
+                Some(
+                    resolve(&fq, eg.ops(), eg.sorts(), model, globals)
+                        .map_err(|e| serr(e.to_string(), span))?,
+                )
+            };
+            let ground = free.is_empty() && !has_rest;
+            let pair = match (facts.as_slice(), facts.first().and_then(eq_sides)) {
+                ([_], Some(sides)) if ground => {
+                    let mut out = Vec::with_capacity(2);
+                    for side in &sides {
+                        if let SurfacePattern::Var(v, _) = side {
+                            out.push(PairSide::Global(v.clone()));
+                            continue;
+                        }
+                        let fq = flatten_surface(std::slice::from_ref(side), eg.ops())
+                            .map_err(|e| serr(e, span))?;
+                        let root = fq.root_vars[0].clone();
+                        let rq = resolve(&fq, eg.ops(), eg.sorts(), model, globals)
+                            .map_err(|e| serr(e.to_string(), span))?;
+                        if let Some(v) = rq.shape.find_var(&root) {
+                            out.push(PairSide::Term(Box::new(rq), v));
+                        }
+                    }
+                    <[_; 2]>::try_from(out).ok()
+                }
+                _ => None,
+            };
+            let mut vars = Vec::new();
+            let mut var_names = Vec::new();
+            if let Some(q) = &query {
+                for (name, _, _) in &free {
+                    if let Some(v) = q.shape.find_var(name)
+                        && !vars.contains(&v)
+                    {
+                        vars.push(v);
+                        var_names.push(name.clone());
+                    }
+                }
+            }
+            // The single-pair decision answers existence only.
+            let pair = if cond == crate::surface_ast::CheckCond::Exists && print.is_none() {
+                pair
+            } else {
+                None
+            };
+            Ok(CCommand::CheckQuery(Box::new(CheckQuery {
+                query,
+                global_eqs,
+                text,
+                // A query prints its variables; one used once is the point, not a slip.
+                warnings: if print.is_some() {
+                    Vec::new()
+                } else {
+                    warnings
+                },
+                pair,
+                cond,
+                vars,
+                var_names,
+                print,
+            })))
+        }
+        SurfaceCommand::CollectionRewrite(r) => {
+            let ruleset = rulesets.resolve(&r.ruleset)?;
+            rulesets.collection_rules += 1;
+            let rule = crate::collection::check(
+                &r,
+                ruleset,
+                eg,
+                model,
+                globals,
+                rulesets.collection_rules - 1,
+            )
+            .map_err(|(msg, span)| serr(msg, span))?;
+            Ok(CCommand::CollectionRule(std::sync::Arc::new(rule)))
+        }
         SurfaceCommand::Rewrite {
             lhs,
             rhs,
             when,
             subsume,
+            flatten,
             ruleset,
         } => {
             let ruleset = rulesets.resolve(&ruleset)?;
@@ -860,8 +1261,9 @@ where
             pats.extend(when);
             let fq = flatten_surface(&pats, eg.ops()).map_err(|e| serr(e, Span::Dummy))?;
             let root_name = fq.root_vars[0].clone();
-            let rq = resolve(&fq, eg.ops(), eg.sorts(), model, globals)
+            let mut rq = resolve(&fq, eg.ops(), eg.sorts(), model, globals)
                 .map_err(|e| serr(e.to_string(), Span::Dummy))?;
+            rq.flatten = flatten;
             let root_vid = rq.shape.find_var(&root_name).ok_or_else(|| {
                 serr(
                     "a rewrite's left-hand side must name an e-class to rewrite; a \
@@ -895,13 +1297,15 @@ where
         SurfaceCommand::Rule {
             body,
             head,
+            flatten,
             ruleset,
         } => {
             let ruleset = rulesets.resolve(&ruleset)?;
             let body_span = body.first().map_or(Span::Dummy, |p| p.span());
             let fq = flatten_surface(&body, eg.ops()).map_err(|e| serr(e, Span::Dummy))?;
-            let rq = resolve(&fq, eg.ops(), eg.sorts(), model, globals)
+            let mut rq = resolve(&fq, eg.ops(), eg.sorts(), model, globals)
                 .map_err(|e| serr(e.to_string(), Span::Dummy))?;
+            rq.flatten = flatten;
             let mut rhs_ctx = RhsResolveCtx::new(&rq);
             let mut actions = Vec::with_capacity(head.len());
             for a in &head {
@@ -979,6 +1383,84 @@ where
         Command::Extract(t) => {
             let ct = check_term(&t, None, eg.ops(), eg.sorts(), model, globals)?;
             Ok(CCommand::Extract(ct))
+        }
+        Command::CostModel { name, source, span } => {
+            // The script is compiled here, so its type errors, polarity errors
+            // included, stop the program before anything runs.
+            let h = crate::cost_models::compile(&source)
+                .map_err(|e| serr(format!("cost-model {name}: {e}"), span))?;
+            rulesets.cost_models.insert(name.clone(), h);
+            Ok(CCommand::Decl(Command::CostModel { name, source, span }))
+        }
+        Command::ExtractWith {
+            term,
+            cost,
+            rung,
+            budget,
+            solver,
+            file,
+            proof,
+            band,
+            span,
+        } => {
+            let ct = check_term(&term, None, eg.ops(), eg.sorts(), model, globals)?;
+            let h = rulesets
+                .cost_models
+                .get(&cost)
+                .cloned()
+                .ok_or_else(|| serr(format!("no cost model named '{cost}'"), span))?;
+            crate::cost_models::check_rung(&rung).map_err(|e| serr(e, span))?;
+            if band.is_some() && !matches!(solver, crate::ast::SolverSpec::Internal) {
+                return Err(serr(":band runs on the internal solver", span));
+            }
+            let mzn_solver = matches!(solver, crate::ast::SolverSpec::MiniZinc(_));
+            if crate::cost_models::is_minizinc(&h) != mzn_solver {
+                return Err(serr(
+                    if mzn_solver {
+                        format!(
+                            "cost-model {cost} is not written in MiniZinc: a MiniZinc solver takes (cost-model NAME :minizinc \"f.mzn\")"
+                        )
+                    } else {
+                        format!(
+                            "cost-model {cost} is written in MiniZinc: it is solved through minizinc, :solver (minizinc \"cp-sat\")"
+                        )
+                    },
+                    span,
+                ));
+            }
+            if crate::cost_models::is_asp(&h) && !matches!(solver, crate::ast::SolverSpec::Asp(_)) {
+                return Err(serr(
+                    format!(
+                        "cost-model {cost} is written in ASP: it is solved by clingo, :solver (asp \"clingo\")"
+                    ),
+                    span,
+                ));
+            }
+            if proof.is_some()
+                && !matches!(
+                    solver,
+                    crate::ast::SolverSpec::Opb(_) | crate::ast::SolverSpec::RoundingSat
+                )
+            {
+                return Err(serr(
+                    ":proof needs a proof-logging pseudo-Boolean solver, :solver (opb ...)",
+                    span,
+                ));
+            }
+            Ok(CCommand::ExtractWith {
+                term: ct,
+                model: h,
+                rung,
+                budget,
+                solver,
+                file,
+                proof,
+                band,
+            })
+        }
+        Command::DumpEGraph { root, file } => {
+            let ct = check_term(&root, None, eg.ops(), eg.sorts(), model, globals)?;
+            Ok(CCommand::DumpEGraph { root: ct, file })
         }
         Command::Ruleset(name) => {
             rulesets.declare(&name);
@@ -1147,6 +1629,25 @@ where
 {
     use crate::registry::{AssocDir, Clamp, OpKind, UnitRef};
 
+    // The registry asserts these two; a program reaches them, so they are sort errors here
+    // (bug #7, and a second declaration of one name, found with it on 2026-10-06).
+    if eg.ops().id_by_name(name).is_some() {
+        return Err(serr(
+            format!("operator '{name}' is already declared"),
+            Span::Dummy,
+        ));
+    }
+    if eg.sorts().is_concrete(ret) {
+        return Err(serr(
+            format!(
+                "operator '{name}' returns the literal sort '{}': a declared operator returns a \
+                 declared sort; a literal is written directly",
+                eg.sorts().name(ret)
+            ),
+            Span::Dummy,
+        ));
+    }
+
     // No algebra tags → plain op. (`meta` still applies: `:cost` / `:unextractable` /
     // constructor-ness are orthogonal to the algebraic kind.)
     if tags.is_empty() {
@@ -1265,6 +1766,12 @@ where
         None => None,
         Some(Term::Lit(tok, _)) => Some(UnitRef::Lit { token: tok.clone() }),
         Some(term @ Term::App { .. }) => Some(UnitRef::Ctor { term: term.clone() }),
+        Some(Term::Counted { span, .. }) => {
+            return Err(serr(
+                "an :identity is a term, not a child with a multiplicity",
+                *span,
+            ));
+        }
     };
 
     // --- Dispatch on the (assoc, comm) shape ---
@@ -1324,7 +1831,9 @@ where
                             Span::Dummy,
                         )
                     })?;
-                let unit = eg.build_ground_cterm(&ct);
+                let unit = eg
+                    .build_ground_cterm(&ct)
+                    .map_err(|e| serr(format!("operator '{name}': :identity: {e}"), Span::Dummy))?;
                 eg.set_unit_node(op, unit);
             }
             // Resolve `:inverse neg` to a real op id now (it must be declared before this

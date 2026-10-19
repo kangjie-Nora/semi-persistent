@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: check-failed
 ;; ANCHOR: completion-example
 (sort E)
@@ -13,9 +15,9 @@
 
 ;; Ordinary congruence follows a direct class reference.
 (function f (E) E)
-(check (= (f (add a b)) (f c)))
+(prove (= (f (add a b)) (f c)))
 
 ;; Plain rebuild does not substitute the known sub-sum into the larger sum.
 (print-size)
-(check (= n (add c d)))
+(prove (= n (add c d)))
 ;; ANCHOR_END: completion-example

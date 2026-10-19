@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; Test: ACI matching + double negation + extraction
 
 (sort E)
@@ -14,5 +16,5 @@
 (let p (Or (A) (Or (Not (Not (B))) (C))))
 (run 10)
 
-(check (= (Not (Not (B))) (B)))
+(prove (= (Not (Not (B))) (B)))
 (extract p)

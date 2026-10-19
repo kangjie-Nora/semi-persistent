@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: on
 ;; CHECK_AC_BASIS: on
@@ -9,4 +11,4 @@
 (let t (xor255 (a) (a)))
 (run 3)
 ;; count 2 mod 255 = 2, so xor255(a,a) is NOT the unit (unlike order 2).
-(check (= t t))
+(prove (= t t))

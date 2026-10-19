@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; The literal is two constructor levels below the pattern root, so its atom is reached
@@ -8,9 +10,9 @@
 
 (let t (Mul (Var "p") (Add (Var "q") (Const 0))))
 (run 5)
-(check (= t (Mul (Var "p") (Var "q"))))
+(prove (= t (Mul (Var "p") (Var "q"))))
 
 ;; Same depth, wrong constant: no match.
 (let u (Mul (Var "r") (Add (Var "s") (Const 3))))
 (run 5)
-(check (!= u (Mul (Var "r") (Var "s"))))
+(prove (!= u (Mul (Var "r") (Var "s"))))

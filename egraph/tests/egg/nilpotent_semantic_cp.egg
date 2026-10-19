@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: on
 ;; CHECK_AC_BASIS: on
@@ -14,5 +16,5 @@
 (let ac (xor (a) (c)))
 (let bc (xor (b) (c)))
 (run 6)
-(check (= (b) ac))
-(check (= (a) bc))
+(prove (= (b) ac))
+(prove (= (a) bc))

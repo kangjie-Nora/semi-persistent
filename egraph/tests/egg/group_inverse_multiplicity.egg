@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: off
 ;; Inverse-pair cancellation respects multiplicities at BUILD time (completion off —
@@ -9,4 +11,4 @@
 (function add (E) E :assoc :comm :identity (zero) :inverse neg)
 (let t (add (a) (a) (neg (a))))
 (run 5)
-(check (= t (a)))
+(prove (= t (a)))

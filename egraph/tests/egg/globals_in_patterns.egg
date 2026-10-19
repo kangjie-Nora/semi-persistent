@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; Tests global variable references in LHS, RHS, and check
@@ -14,9 +16,9 @@
 ;; First child IS global a → rewrite fires, x binds to b
 (let t (Add a b))
 (run 10)
-(check (= t (Pair (V 2) (V 2))))
+(prove (= t (Pair (V 2) (V 2))))
 
 ;; First child is (V 3), NOT in a's e-class → rewrite does NOT fire
 (let u (Add (V 3) (V 4)))
 (run 10)
-(check (!= u t))
+(prove (!= u t))

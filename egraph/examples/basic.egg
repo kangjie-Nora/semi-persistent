@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 (datatype Math
   (Num IBig)
   (Add Math Math)
@@ -10,4 +12,4 @@
 
 (let expr (Mul (Num 2) (Add (Num 1) (Num 3))))
 (run 10)
-(check (= expr (Num 8)))
+(prove (= expr (Num 8)))

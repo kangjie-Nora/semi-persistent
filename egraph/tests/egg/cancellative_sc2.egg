@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: on
 ;; CHECK_AC_BASIS: on
@@ -20,5 +22,5 @@
 (let q1 (mul (a) (a) (b)))
 (let q2 (mul (a) (b) (b)))
 (run 8)
-(check (= q1 (a)))
-(check (= q2 (b)))
+(prove (= q1 (a)))
+(prove (= q2 (b)))

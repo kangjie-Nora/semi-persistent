@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; The control for the rest-linearity rejection: distinct rest names are the ordinary
 ;; window pattern and must still compile and fire.
@@ -10,4 +12,4 @@
 (let t (S (a) (b) (c)))
 (rule ((S ..p x ..q)) ((union (W) x)))
 (run 2)
-(check (= (W) (b)))
+(prove (= (W) (b)))
