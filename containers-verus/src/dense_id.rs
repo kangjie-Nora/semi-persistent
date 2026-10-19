@@ -125,6 +125,9 @@ impl core::default::Default for DenseId31 {
 // ---------------------------------------------------------------------------
 
 impl IndexLike for DenseId31 {
+    proof fn lemma_obeys_key_model() {
+        broadcast use axiom_key_model_dense_id31;
+    }
     open spec fn as_nat(self) -> nat { self@ }
     open spec fn max_nat() -> nat { DENSE31_BOUND as nat }
     closed spec fn min_spec() -> Self { DenseId31 { raw: 0 } }
@@ -171,6 +174,10 @@ impl IndexLike for DenseId31 {
 
     fn le(self, other: Self) -> bool { self.raw <= other.raw }
 }
+
+/// ASSUMED (trust ledger group D shape): `DenseId31`'s `==`/`Hash` are structural
+/// over `raw`, so equal ids are identical values and hashing is deterministic.
+pub broadcast axiom fn axiom_key_model_dense_id31() ensures #[trigger] vstd::std_specs::hash::obeys_key_model::<DenseId31>();
 
 // ---------------------------------------------------------------------------
 // DenseId: the 31-bit id family (production's `define_id31!`). `Index = u32`:
@@ -292,6 +299,15 @@ impl Tagged for DenseId31 {
         DenseId31 { raw: *r & 0x7fff_ffffu32 }
     }
 
+    #[inline(always)]
+    fn from_repr_clean(r: &u32, _tok: crate::tagged::CrateOnly) -> (v: DenseId31) {
+        // No tag bit: the mask is the identity, so read the word as is.
+        assert(((*r) & 0x8000_0000u32) == 0 ==> ((*r) & 0x7fff_ffffu32) == *r
+            && *r < 0x8000_0000u32) by (bit_vector);
+        proof { lemma_value_of_view(*r); }
+        DenseId31 { raw: *r }
+    }
+
     fn tag(r: &u32) -> (b: bool) {
         (*r & 0x8000_0000u32) != 0
     }
@@ -374,6 +390,9 @@ impl core::default::Default for DenseId63 {
 }
 
 impl IndexLike for DenseId63 {
+    proof fn lemma_obeys_key_model() {
+        broadcast use axiom_key_model_dense_id63;
+    }
     open spec fn as_nat(self) -> nat { self@ }
     open spec fn max_nat() -> nat { DENSE63_BOUND as nat }
     closed spec fn min_spec() -> Self { DenseId63 { raw: 0 } }
@@ -423,6 +442,10 @@ impl IndexLike for DenseId63 {
     fn le(self, other: Self) -> bool { self.raw <= other.raw }
 }
 
+/// ASSUMED (trust ledger group D shape): `DenseId63`'s `==`/`Hash` are structural
+/// over `raw`, so equal ids are identical values and hashing is deterministic.
+pub broadcast axiom fn axiom_key_model_dense_id63() ensures #[trigger] vstd::std_specs::hash::obeys_key_model::<DenseId63>();
+
 impl Tagged for DenseId63 {
     type Repr = u64;
 
@@ -463,6 +486,15 @@ impl Tagged for DenseId63 {
         assert(((*r) & 0x7fff_ffff_ffff_ffffu64) < 0x8000_0000_0000_0000u64) by (bit_vector);
         proof { lemma_value_of_view64(*r); }
         DenseId63 { raw: *r & 0x7fff_ffff_ffff_ffffu64 }
+    }
+
+    #[inline(always)]
+    fn from_repr_clean(r: &u64, _tok: crate::tagged::CrateOnly) -> (v: DenseId63) {
+        // No tag bit: the mask is the identity, so read the word as is.
+        assert(((*r) & 0x8000_0000_0000_0000u64) == 0 ==> ((*r) & 0x7fff_ffff_ffff_ffffu64) == *r
+            && *r < 0x8000_0000_0000_0000u64) by (bit_vector);
+        proof { lemma_value_of_view64(*r); }
+        DenseId63 { raw: *r }
     }
 
     fn tag(r: &u64) -> (b: bool) {
@@ -571,7 +603,7 @@ pub proof fn lemma_value_of_view(r: u32)
 /// composes through the store's `T: Tagged, I: IndexLike` bounds with one type
 /// filling both, exactly as production's `define_id31!` ids do.
 pub fn lemma_dense_id31_indexes_and_stores_itself() -> (s: InlineStore<DenseId31, DenseId31>)
-    ensures DiffStore::<DenseId31, DenseId31, true>::wf(&s),
+    ensures crate::diff_store_ops::DiffStoreOps::<DenseId31, DenseId31, true>::wf(&s),
 {
     InlineStore::<DenseId31, DenseId31>::new()
 }

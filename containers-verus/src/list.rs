@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Arena-backed intrusive singly-linked lists with semi-persistence (verified).
 //!
-//! `ListArena` owns two arenas, each a verified `Vec` over `InlineStore`:
+//! `ListArena` owns two arenas, each a verified `Vec` whose store the policy
+//! parameter `P` chooses (`crate::store_policy`; the default `HotFirst` gives
+//! `InlineStore`):
 //!   - `heads[L]`  — per-list head pointer (+ tail index for O(1) append);
 //!   - `nodes[k]`  — `{ payload, next }`, the intrusive node cells.
 //! This is the *parent use-list* of the e-graph (production: `list.rs`'s
@@ -30,9 +32,10 @@
 //! at most as long as the arena, and relinking one list frames the others.
 //!
 //! ## Storage layout (production parity)
-//! - Both columns are `InlineStore`, as production's are: the capture flag is
-//!   stolen from a niche in the element's own `Tagged` repr, so there is no side
-//!   bit-vector on either side. This needs `ListNode`/`ListHead` to BE `Tagged`,
+//! - Under the default policy both columns are `InlineStore`, as production's
+//!   are: the capture flag is stolen from a niche in the element's own `Tagged`
+//!   repr, so there is no side bit-vector on either side. This needs
+//!   `ListNode`/`ListHead` to BE `Tagged`,
 //!   which they are (impls below, mirroring `containers/src/list.rs:52-138`):
 //!   a node delegates the tag to its payload, a header steals it from the tail
 //!   word. The payload bound is therefore `T: Tagged` — satisfied at the real
@@ -57,8 +60,8 @@ use vstd::prelude::*;
 
 use crate::diff_store::DiffStore;
 use crate::index_like::IndexLike;
-use crate::inline_store::InlineStore;
 use crate::opt::DenseId;
+use crate::store_policy::{HotFirst, TaggedFamily};
 use crate::tagged::Tagged;
 use crate::vec::{ShrinkPolicy, Vec as SpVec, VecToken};
 
@@ -170,34 +173,53 @@ impl<T, N: DenseId + Tagged> ListNode<T, N> {
 }
 
 impl<T, N: DenseId + Tagged + core::default::Default> ListNode<T, N> {
-    /// Write the next pointer (pack into the niche). `r.idx` must be a
-    /// representable id (callers hold `idx < N::id_bound()` from the arena's
-    /// allocation guard).
-    pub(crate) fn set_next(&mut self, r: NodeRef)
-        requires !r.is_null() ==> (r.idx as nat) < N::id_bound(),
+    /// A fresh node holding `payload` with a null next pointer. One
+    /// constructor, no default-then-overwrite (production's `ListNode::new`).
+    #[inline(always)]
+    pub(crate) fn with_payload(payload: T) -> (r: ListNode<T, N>)
+        ensures r.next_wf(), r.next_ref().is_null(), r.payload == payload,
+    {
+        let o = crate::opt::Opt::<N>::none();
+        ListNode { payload, next_repr: o.into_raw() }
+    }
+
+    /// Write the next pointer from an already-typed id: no `usize` round trip
+    /// and no range check, the id carries its own bound.
+    #[inline(always)]
+    pub(crate) fn set_next_id(&mut self, id: N)
         ensures
             final(self).next_wf(),
-            final(self).next_ref() == r || (r.is_null() && final(self).next_ref() == NodeRef { some: false, idx: 0 }),
+            final(self).next_ref() == (NodeRef { some: true, idx: id.id_nat() as usize }),
             final(self).payload == old(self).payload,
     {
-        if r.some {
-            let id = N::from_usize(r.idx);
-            let o = crate::opt::Opt::<N>::some(id);
-            self.next_repr = o.into_raw();
-            proof {
-                assert(!N::tag_of(self.next_repr));
-                assert(N::value_of(self.next_repr) == id);
-                assert(id.id_nat() == r.idx as nat);
-                assert(self.next_ref() == r);
-            }
-        } else {
-            let o = crate::opt::Opt::<N>::none();
-            self.next_repr = o.into_raw();
-            proof {
-                assert(N::tag_of(self.next_repr));
-                assert(self.next_ref() == NodeRef { some: false, idx: 0 });
-            }
+        let o = crate::opt::Opt::<N>::some(id);
+        self.next_repr = o.into_raw();
+        proof {
+            assert(!N::tag_of(self.next_repr));
+            assert(N::value_of(self.next_repr) == id);
         }
+    }
+
+    /// A fresh node holding `payload` whose next word is `raw`, an already
+    /// well-formed packed word (a head's, for prepend): no decode, no re-pack.
+    #[inline(always)]
+    pub(crate) fn with_payload_next_raw(payload: T, raw: <N as Tagged>::Repr) -> (r: ListNode<T, N>)
+        requires N::repr_wf(raw),
+        ensures r.next_wf(), r.next_repr == raw, r.payload == payload,
+    {
+        ListNode { payload, next_repr: raw }
+    }
+
+    /// Write the next word from an already well-formed packed word.
+    #[inline(always)]
+    pub(crate) fn set_next_raw(&mut self, raw: <N as Tagged>::Repr)
+        requires N::repr_wf(raw),
+        ensures
+            final(self).next_wf(),
+            final(self).next_repr == raw,
+            final(self).payload == old(self).payload,
+    {
+        self.next_repr = raw;
     }
 }
 
@@ -260,6 +282,10 @@ impl<T: Tagged, N: DenseId + Tagged> Tagged for ListNode<T, N> {
     }
     fn from_repr(r: &Self::Repr) -> (v: Self) {
         ListNode { payload: T::from_repr(&r.a), next_repr: r.b }
+    }
+    #[inline(always)]
+    fn from_repr_clean(r: &Self::Repr, tok: crate::tagged::CrateOnly) -> (v: Self) {
+        ListNode { payload: T::from_repr_clean(&r.a, tok), next_repr: r.b }
     }
     fn tag(r: &Self::Repr) -> (b: bool) {
         T::tag(&r.a)
@@ -352,6 +378,74 @@ impl<N: DenseId + Tagged> ListHead<N> {
 }
 
 impl<N: DenseId + Tagged + core::default::Default> ListHead<N> {
+    /// Emptiness is the head word's tag bit (production's `ListHead::is_empty`);
+    /// no `Opt` decode, no `NodeRef` build.
+    #[inline(always)]
+    pub(crate) fn is_empty_exec(&self) -> (b: bool)
+        requires self.head_wf(),
+        ensures b == self.head_ref().is_null(),
+    {
+        N::tag(&self.head_repr)
+    }
+
+    /// The tail as its typed id (meaningful only when non-empty).
+    #[inline(always)]
+    pub(crate) fn tail_id(&self) -> (r: N)
+        ensures r == self.tail,
+    {
+        self.tail
+    }
+
+    /// Head write from an already-typed id: no range check.
+    #[inline(always)]
+    pub(crate) fn set_head_id(&mut self, id: N)
+        ensures
+            N::repr_wf(final(self).head_repr),
+            final(self).tail == old(self).tail,
+            final(self).len == old(self).len,
+            final(self).head_ref() == (NodeRef { some: true, idx: id.id_nat() as usize }),
+    {
+        let o = crate::opt::Opt::<N>::some(id);
+        self.head_repr = o.into_raw();
+        proof {
+            assert(!N::tag_of(self.head_repr));
+            assert(N::value_of(self.head_repr) == id);
+        }
+    }
+
+    /// Tail write from an already-typed id: no range check.
+    #[inline(always)]
+    pub(crate) fn set_tail_id(&mut self, id: N)
+        ensures
+            final(self).head_repr == old(self).head_repr,
+            final(self).len == old(self).len,
+            final(self).tail == id,
+    {
+        self.tail = id;
+    }
+
+    /// The packed head word as is (for a copy into a node's next word or
+    /// another head, both `Repr`-typed).
+    #[inline(always)]
+    pub(crate) fn head_raw(&self) -> (r: <N as Tagged>::Repr)
+        ensures r == self.head_repr,
+    {
+        self.head_repr
+    }
+
+    /// Write the head word from an already well-formed packed word.
+    #[inline(always)]
+    pub(crate) fn set_head_raw(&mut self, raw: <N as Tagged>::Repr)
+        requires N::repr_wf(raw),
+        ensures
+            N::repr_wf(final(self).head_repr),
+            final(self).head_repr == raw,
+            final(self).tail == old(self).tail,
+            final(self).len == old(self).len,
+    {
+        self.head_repr = raw;
+    }
+
     /// Read the head pointer (unpack).
     pub(crate) fn head(&self) -> (r: NodeRef)
         requires self.head_wf(),
@@ -368,63 +462,6 @@ impl<N: DenseId + Tagged + core::default::Default> ListHead<N> {
             }
             NodeRef { some: true, idx: id.as_usize() }
         }
-    }
-
-    /// Read the tail index (the tail is a bare id; no unpacking needed).
-    pub(crate) fn tail(&self) -> (r: usize)
-        requires self.head_wf(),
-        ensures r == self.tail_spec(),
-    {
-        let id = self.tail;
-        proof { id.lemma_as_nat_is_id_nat(); }  // as_usize -> id_nat bridge. prod-parity
-        id.as_usize()
-    }
-
-    /// Write the head pointer (pack).
-    pub(crate) fn set_head(&mut self, r: NodeRef)
-        requires !r.is_null() ==> (r.idx as nat) < N::id_bound(),
-        ensures
-            N::repr_wf(final(self).head_repr),
-            final(self).tail == old(self).tail,
-            final(self).len == old(self).len,
-            final(self).head_ref() == r
-                || (r.is_null() && final(self).head_ref() == NodeRef { some: false, idx: 0 }),
-    {
-        if r.some {
-            let id = N::from_usize(r.idx);
-            let o = crate::opt::Opt::<N>::some(id);
-            self.head_repr = o.into_raw();
-            proof {
-                assert(!N::tag_of(self.head_repr));
-                assert(N::value_of(self.head_repr) == id);
-                assert(self.head_ref() == r);
-            }
-        } else {
-            let o = crate::opt::Opt::<N>::none();
-            self.head_repr = o.into_raw();
-        }
-    }
-
-    /// Write the tail index (`t < N::id_bound()` from allocation). The tail is
-    /// a bare id, so this is a direct store — no niche packing.
-    pub(crate) fn set_tail(&mut self, t: usize)
-        requires (t as nat) < N::id_bound(),
-        ensures
-            final(self).head_repr == old(self).head_repr,
-            final(self).len == old(self).len,
-            final(self).tail_spec() == t,
-    {
-        let id = N::from_usize(t);
-        self.tail = id;
-        proof { assert(id.id_nat() == t as nat); }
-    }
-
-    /// Read-only unpacked head for white-box tests.
-    #[doc(hidden)]
-    #[verifier::external_body]
-    pub fn white_box_head(&self) -> Option<usize> {
-        let o = crate::opt::Opt::<N>::from_raw(self.head_repr);
-        if o.is_none() { None } else { Some(o.get().as_usize()) }
     }
 }
 
@@ -518,39 +555,24 @@ impl<N: DenseId + Tagged> Tagged for ListHead<N> {
     }
 }
 
-/// Token bundling the two inner-vector tokens.
-#[derive(Copy, Clone)]
-pub struct ListArenaToken {
-    pub(crate) heads: VecToken,
-    pub(crate) nodes: VecToken,
-}
-
-impl ListArenaToken {
-    /// Reconstruction coordinates of the two components (spec counterparts).
-    pub open(crate) spec fn heads_frame_idx_spec(self) -> nat {
-        self.heads.frame_idx as nat
-    }
-
-    pub open(crate) spec fn nodes_frame_idx_spec(self) -> nat {
-        self.nodes.frame_idx as nat
-    }
-}
-
-/// Typed-id list arena (production parity: `ListArena<T, L, N, TRACK>` with
+/// Typed-id list arena (production parity: `ListArena<T, L, N, TRACK, P>` with
 /// `L` the list-handle id type and `N` the node id type). The verified CORE
 /// operates on `usize` rows (the ghost model and every proof below); `L`/`N`
 /// type the API boundary, with conversions through the verified `DenseId`
 /// axioms (`id_nat` injective + bounded). `N` bounds node allocation
 /// (production's `VecI<_, N::Index>` capacity); nodes are otherwise internal
 /// — the iterator yields payloads by value, as production's does.
-pub struct ListArena<T, L, N, const TRACK: bool>
+pub struct ListArena<T, L, N, const TRACK: bool, P = HotFirst>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
-    pub(crate) heads: SpVec<ListHead<N>, L::Index, InlineStore<ListHead<N>, L::Index>, TRACK>,
-    pub(crate) nodes: SpVec<ListNode<T, N>, N::Index, InlineStore<ListNode<T, N>, N::Index>, TRACK>,
+    pub(crate) heads: SpVec<ListHead<N>, L::Index,
+        <P as TaggedFamily<ListHead<N>, L::Index, TRACK>>::Store, TRACK>,
+    pub(crate) nodes: SpVec<ListNode<T, N>, N::Index,
+        <P as TaggedFamily<ListNode<T, N>, N::Index, TRACK>>::Store, TRACK>,
     pub(crate) _l: core::marker::PhantomData<L>,
     pub(crate) _n: core::marker::PhantomData<N>,
     /// Ghost model: `model@[l]` is the in-order node indices of list `l`.
@@ -562,11 +584,12 @@ where
     pub(crate) model_snapshots: Ghost<Seq<Seq<Seq<usize>>>>,
 }
 
-impl<T, L, N, const TRACK: bool> ListArena<T, L, N, TRACK>
+impl<T, L, N, const TRACK: bool, P> ListArena<T, L, N, TRACK, P>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
     // -- index-width bridge --------------------------------------------------
     //
@@ -580,8 +603,8 @@ where
     //
     // The conversion is TOTAL, not fallible, which is what keeps it out of the
     // proof body: a row index that is `< view().len()` is `< Index::max_nat()`
-    // by the store's own `wf` (`InlineStore::wf_spec` carries
-    // `data@.len() < I::max_nat()`), so `try_from_usize` cannot be `None` at
+    // by the store's own `wf` (every store pins `data().len() < I::max_nat()`;
+    // `DiffStore::lemma_wf_data_len`), so `try_from_usize` cannot be `None` at
     // any in-bounds index. Each wrapper discharges that once and hands the core
     // a plain index; no call site needs its own bound.
 
@@ -699,15 +722,6 @@ where
         self.heads.len().as_usize()
     }
 
-    /// `nodes.len()` as a `usize` row count. Same bridge as `heads_len`.
-    #[inline(always)]
-    pub(crate) fn nodes_len(&self) -> (n: usize)
-        requires self.nodes.wf(),
-        ensures n as nat == self.nodes_view().len(),
-    {
-        self.nodes.len().as_usize()
-    }
-
     /// Push headroom, per id family: an arena with room for one more
     /// id-representable node also has room in the storage WORD. This is what
     /// lets the `push` sites state the id-range precondition — the meaningful
@@ -764,6 +778,7 @@ where
             i < self.heads_view().len(),
         ensures i < <L::Index as crate::index_like::IndexLike>::max_nat(),
     {
+        self.heads.store.lemma_wf_data_len();
     }
 
     /// Same for `nodes` / `N::Index`.
@@ -773,6 +788,7 @@ where
             i < self.nodes_view().len(),
         ensures i < <N::Index as crate::index_like::IndexLike>::max_nat(),
     {
+        self.nodes.store.lemma_wf_data_len();
     }
 
     /// The node arena's *population* — not just any row in it — is representable in
@@ -784,13 +800,14 @@ where
     /// `dst.len + src.len` are both in range as a consequence of `wf` — no caller has
     /// to state it, and there is nothing left for a caller to state it *wrongly*.
     ///
-    /// Empty body: the bound is literally `InlineStore::wf_spec`'s first conjunct
-    /// (`data@.len() < I::max_nat()`), and `nodes_view()` is that data mapped through
-    /// `value_of`, which preserves length.
+    /// The bound is the store's own `wf` (every store pins
+    /// `data().len() < I::max_nat()`), reached through the `DiffStore` lemma
+    /// since the column's store is chosen by the policy parameter.
     pub(crate) proof fn lemma_nodes_len_fits(&self)
         requires self.nodes.wf(),
         ensures self.nodes_view().len() < <N::Index as crate::index_like::IndexLike>::max_nat(),
     {
+        self.nodes.store.lemma_wf_data_len();
     }
 
     pub open(crate) spec fn nodes_view(&self) -> Seq<ListNode<T, N>> {
@@ -830,30 +847,8 @@ where
         self.model_snapshots@
     }
 
-    /// Per-component token validity (composite).
-    pub open(crate) spec fn is_token_valid_spec(&self, token: ListArenaToken) -> bool {
-        &&& self.heads.is_token_valid_spec(token.heads)
-        &&& self.nodes.is_token_valid_spec(token.nodes)
-    }
 
-    /// "Restorable now" for the composite token.
-    pub open(crate) spec fn is_restorable_spec(&self, token: ListArenaToken) -> bool {
-        &&& self.heads.is_restorable_spec(token.heads)
-        &&& self.nodes.is_restorable_spec(token.nodes)
-    }
 
-    /// Composite restore preconditions (everything except the same-mark
-    /// frame agreement, which restore states explicitly).
-    pub open(crate) spec fn restore_pre_spec(&self, token: ListArenaToken) -> bool {
-        &&& self.heads.is_token_valid_spec(token.heads)
-        &&& token.heads.frame_idx_spec() < self.heads.depth_spec()
-        &&& self.heads.depth_spec() < u32::MAX
-        &&& self.heads.fork_count_spec() + 1 <= u32::MAX
-        &&& self.nodes.is_token_valid_spec(token.nodes)
-        &&& token.nodes.frame_idx_spec() < self.nodes.depth_spec()
-        &&& self.nodes.depth_spec() < u32::MAX
-        &&& self.nodes.fork_count_spec() + 1 <= u32::MAX
-    }
 
     pub open(crate) spec fn model_view(&self) -> Seq<Seq<usize>> {
         self.model@
@@ -1069,10 +1064,10 @@ where
             a.model_snapshots_view().len() == 0,
     {
         let a = ListArena {
-            heads:
-                SpVec::<ListHead<N>, L::Index, InlineStore<ListHead<N>, L::Index>, TRACK>::new(),
-            nodes:
-                SpVec::<ListNode<T, N>, N::Index, InlineStore<ListNode<T, N>, N::Index>, TRACK>::new(),
+            heads: SpVec::with_store(
+                <P as TaggedFamily<ListHead<N>, L::Index, TRACK>>::empty()),
+            nodes: SpVec::with_store(
+                <P as TaggedFamily<ListNode<T, N>, N::Index, TRACK>>::empty()),
             _l: core::marker::PhantomData,
             _n: core::marker::PhantomData,
             model: Ghost(Seq::empty()),
@@ -1132,9 +1127,13 @@ where
     /// arena's end — a *larger* index than anything in the list, which the old
     /// index-ordering crutch forbade and is now simply fine), links it to the
     /// old head, and makes it the new model[l][0].
-    pub(crate) fn prepend_raw(&mut self, l: usize, payload: T)
+    // rlimit pinned: borderline against the default budget (z3-seed flaky once
+    // the crate's function count shifts the solver ordering).
+    #[verifier::rlimit(800)]
+    pub(crate) fn prepend_raw(&mut self, l: usize, payload: T, n: usize)
         requires
             old(self).wf(),
+            n == old(self).nodes_view().len(),
             (l as int) < old(self).model_view().len(),
             old(self).nodes_view().len() + 1 < usize::MAX,
             // Packing headroom, per id family: the fresh slot's id must be
@@ -1176,15 +1175,24 @@ where
         proof { self.lemma_len_bounded(l as int); }
         let ghost old_nodes = self.nodes_view();
         let ghost old_model = self.model@;
-        let h0 = self.heads.get_index(self.head_ix(l));
-        let old_head = h0.head();
-        let was_empty = old_head.is_null_exec();
+        // Every index is converted once and carried; every value stays in
+        // its typed form. The node count arrives validated from `try_prepend`
+        // (it equals the current count by precondition); the fresh slot's id
+        // is the one range check left, and the `requires` discharges it.
+        let li = self.head_ix(l);
+        let h0 = self.heads.get_at(li);
+        let ghost old_head = h0.head_ref();
+        let was_empty = h0.is_empty_exec();
 
-        let slot = self.nodes_len();
-        let mut new_node: ListNode<T, N> = ListNode::default();
-        new_node.payload = payload;
-        new_node.set_next(old_head);
-        proof { Self::lemma_node_push_fits(self.nodes_view().len()); }
+        let slot = n;
+        let slot_id = N::from_usize(slot);
+        proof {
+            assert(slot_id.id_nat() == slot as nat);
+            Self::lemma_node_push_fits(self.nodes_view().len());
+        }
+        // The new node's next word is the old head word, copied as is.
+        let new_node = ListNode::with_payload_next_raw(payload, h0.head_raw());
+        proof { assert(new_node.next_ref() == old_head); }
         self.nodes.push(new_node);
 
         // model[l] := [slot] ++ model[l]
@@ -1193,9 +1201,11 @@ where
         // Single head read (production parity): h0 is still current — the
         // heads vec is untouched since it was read.
         let mut h = h0;
-        h.set_head(NodeRef::to(slot));
+        h.set_head_id(slot_id);
+        proof { assert(h.head_ref() == (NodeRef { some: true, idx: slot })); }
         if was_empty {
-            h.set_tail(slot);
+            h.set_tail_id(slot_id);
+            proof { assert(h.tail_spec() == slot); }
         }
         // `h.len + 1` is representable, with no help from the caller. `h.len` is the OLD
         // model length (old `cache_len`), which `lemma_len_bounded` above bounded by the
@@ -1209,8 +1219,7 @@ where
             assert(self.nodes_view().len() == old_nodes.len() + 1);
         }
         h.len = Self::len_incr(h.len);
-        let li = self.head_ix(l);
-        self.heads.set_index(li, h);
+        self.heads.set_at(li, h);
 
         proof {
             let model = self.model@;
@@ -1348,10 +1357,11 @@ where
     /// The disjointness quantifier is isolated in
     /// `lemma_insert_fresh_disjoint`; the enclosing proof still exceeds the
     /// default solver budget, so this function carries an explicit margin.
-    #[verifier::rlimit(60)]
-    pub(crate) fn append_raw(&mut self, l: usize, payload: T)
+    #[verifier::rlimit(300)]
+    pub(crate) fn append_raw(&mut self, l: usize, payload: T, n: usize)
         requires
             old(self).wf(),
+            n == old(self).nodes_view().len(),
             (l as int) < old(self).model_view().len(),
             old(self).nodes_view().len() + 1 < usize::MAX,
             // Packing headroom, per id family; see `prepend_raw`.
@@ -1384,23 +1394,44 @@ where
         proof { self.lemma_len_bounded(l as int); }
         let ghost old_nodes = self.nodes_view();
         let ghost old_model = self.model@;
-        let h0 = self.heads.get_index(self.head_ix(l));
-        let was_empty = h0.head().is_null_exec();
+        // Carry typed indices; ordinary store indexing still checks bounds.
+        let li = self.head_ix(l);
+        let h0 = self.heads.get_at(li);
+        // The cached count agrees with the head's emptiness by cache_ok/cache_len.
+        // Testing it directly lets the increment establish non-emptiness for
+        // the next append without recovering that fact from the packed head.
+        let was_empty = h0.len.as_usize() == 0;
+        proof { self.lemma_cache_ends_at(l as int); }
 
-        let slot = self.nodes_len();
-        let mut new_node: ListNode<T, N> = ListNode::default();
-        new_node.payload = payload;
-        new_node.set_next(NodeRef::null());
-        proof { Self::lemma_node_push_fits(self.nodes_view().len()); }
-        self.nodes.push(new_node);
+        // The node count arrives validated from `try_append`; it is not
+        // re-read here (it equals the current count by precondition).
+        let slot = n;
+        let slot_id = N::from_usize(slot);
+        proof {
+            assert(slot_id.id_nat() == slot as nat);
+            Self::lemma_node_push_fits(self.nodes_view().len());
+        }
+        self.nodes.push(ListNode::with_payload(payload));
 
         if !was_empty {
             // relink old tail node forward to slot.
-            let old_tail = h0.tail();
-            let mut tnode = self.nodes.get_index(self.node_ix(old_tail));
-            tnode.set_next(NodeRef::to(slot));
-            let ti = self.node_ix(old_tail);
-            self.nodes.set_index(ti, tnode);
+            let ti = h0.tail_id().to_index();
+            proof {
+                crate::opt::lemma_id_nat_fits_usize(h0.tail);
+                assert(ti.as_nat() == h0.tail_spec() as nat);
+            }
+            let mut tnode = self.nodes.get_at(ti);
+            // Keep the old tail's rewrite full width: re-encode the payload
+            // through the masked decode (an identity by the Tagged contracts),
+            // so the node is written back as one 8-byte store. Written as a
+            // 4-byte store to the next field alone, with its address loaded
+            // from the head the previous append just stored, it stalls the
+            // backend on Apple M4: +2.8 cycles per append, all ARM_STALL_BACKEND,
+            // no extra instructions (kperf counters, 2026-09-25).
+            tnode.payload = T::from_repr(&tnode.payload.into_repr());
+            tnode.set_next_id(slot_id);
+            proof { assert(tnode.next_ref() == (NodeRef { some: true, idx: slot })); }
+            self.nodes.set_at(ti, tnode);
         }
 
         // model[l] := model[l] ++ [slot]
@@ -1409,9 +1440,11 @@ where
         // Single head read (production parity): h0 is still current.
         let mut h = h0;
         if was_empty {
-            h.set_head(NodeRef::to(slot));
+            h.set_head_id(slot_id);
+            proof { assert(h.head_ref() == (NodeRef { some: true, idx: slot })); }
         }
-        h.set_tail(slot);
+        h.set_tail_id(slot_id);
+        proof { assert(h.tail_spec() == slot); }
         // Same chain as `prepend_raw`: old count <= old arena, arena grew by the pushed
         // node, and the store's `wf` bounds the grown arena by `N::Index`'s range.
         proof {
@@ -1420,8 +1453,7 @@ where
             assert(self.nodes_view().len() == old_nodes.len() + 1);
         }
         h.len = Self::len_incr(h.len);
-        let li = self.head_ix(l);
-        self.heads.set_index(li, h);
+        self.heads.set_at(li, h);
 
         proof {
             let model = self.model@;
@@ -1643,6 +1675,15 @@ where
             final(self).nodes_snapshots_view() == old(self).nodes_snapshots_view(),
             final(self).model_snapshots_view() == old(self).model_snapshots_view(),
     {
+        // `model_disjoint` and `cache_ok` stay hidden in this body: the old
+        // state's four-variable disjointness quantifier and the self-feeding
+        // `next` quantifier (instantiated at `(l, p)` it creates
+        // `model[l][p + 1]`, which matches it again) would otherwise share
+        // this large context. The ends lemma supplies the two lists' cached
+        // head/tail facts; the delegated lemmas below re-establish both
+        // predicates for the new state in their own small contexts.
+        hide(ListArena::model_disjoint);
+        hide(ListArena::cache_ok);
         // Bound dst.len + src.len before mutating: the two lists are disjoint, so their
         // combined length fits the arena, and the arena fits `N::Index`. No node is
         // pushed here, so unlike prepend/append both facts are about the *current* arena
@@ -1650,13 +1691,22 @@ where
         proof {
             self.lemma_concat_len_bounded(dst as int, src as int);
             self.lemma_nodes_len_fits();
+            self.lemma_cache_ends_at(dst as int);
+            self.lemma_cache_ends_at(src as int);
         }
         let ghost old_nodes = self.nodes_view();
         let ghost old_model = self.model@;
-        let hd = self.heads.get_index(self.head_ix(dst));
-        let hs = self.heads.get_index(self.head_ix(src));
-        let dst_empty = hd.head().is_null_exec();
-        let src_empty = hs.head().is_null_exec();
+        // Each head index converted once, each head read once; the relink
+        // goes from the typed tail id to the store index, and the takeover
+        // copies src's packed head word as is. The bounds are this function's
+        // preconditions (`wf` plus the two handle ranges), so the reads and
+        // writes are the checked-by-proof accessors.
+        let di = self.head_ix(dst);
+        let si = self.head_ix(src);
+        let hd = self.heads.get_at(di);
+        let hs = self.heads.get_at(si);
+        let dst_empty = hd.is_empty_exec();
+        let src_empty = hs.is_empty_exec();
         // hd.len == |old dst|, hs.len == |old src| (old cache_len); sum <= nodes.len()
         // < N::Index::max_nat() from the two lemmas above.
         proof {
@@ -1668,29 +1718,35 @@ where
         if !src_empty {
             if dst_empty {
                 // dst takes over src's head/tail.
-                let mut h = self.heads.get_index(self.head_ix(dst));
-                h.set_head(hs.head());
-                h.set_tail(hs.tail());
+                let mut h = hd;
+                h.set_head_raw(hs.head_raw());
+                h.set_tail_id(hs.tail_id());
                 h.len = new_dst_len;
-                let di = self.head_ix(dst);
-                self.heads.set_index(di, h);
+                proof {
+                    assert(h.head_ref() == hs.head_ref());
+                    assert(h.tail_spec() == hs.tail_spec());
+                }
+                self.heads.set_at(di, h);
             } else {
                 // link dst's tail node forward to src's head.
-                let dtail = hd.tail();
-                let mut tnode = self.nodes.get_index(self.node_ix(dtail));
-                tnode.set_next(hs.head());
-                let ti = self.node_ix(dtail);
-                self.nodes.set_index(ti, tnode);
-                let mut h = self.heads.get_index(self.head_ix(dst));
-                h.set_tail(hs.tail());
+                let ti = hd.tail_id().to_index();
+                proof {
+                    crate::opt::lemma_id_nat_fits_usize(hd.tail);
+                    assert(ti.as_nat() == hd.tail_spec() as nat);
+                }
+                let mut tnode = self.nodes.get_at(ti);
+                tnode.set_next_raw(hs.head_raw());
+                proof { assert(tnode.next_ref() == hs.head_ref()); }
+                self.nodes.set_at(ti, tnode);
+                let mut h = hd;
+                h.set_tail_id(hs.tail_id());
                 h.len = new_dst_len;
-                let di = self.head_ix(dst);
-                self.heads.set_index(di, h);
+                proof { assert(h.tail_spec() == hs.tail_spec()); }
+                self.heads.set_at(di, h);
             }
         }
         // clear src (len resets to 0 via default).
-        let si = self.head_ix(src);
-        self.heads.set_index(si, ListHead::default());
+        self.heads.set_at(si, ListHead::default());
 
         // model: dst := dst ++ src; src := [].
         self.model = Ghost(
@@ -1734,55 +1790,13 @@ where
                 }
             }
 
-            // --- disjoint: dst++src concatenates two OLD-disjoint lists; every
-            // entry still maps to a distinct old (list,pos), and src is now empty.
-            // Delegated: proved here, with both states' `wf()` in scope, this
-            // one quantifier e-matched its way to 17.6M instantiations.
-            lemma_splice_disjoint(old_model, model, dst as int, src as int);
-
-            // --- cache_ok nexts: only dst's old tail node was relinked
-            // (its next -> src's head); every other node-next is unchanged.
-            assert forall|l2: int, p: int|
-                0 <= l2 < model.len() && 0 <= p < model[l2].len() implies {
-                    let nx = nodes[#[trigger] model[l2][p] as int].next_ref();
-                    if p == model[l2].len() - 1 { nx.is_null() }
-                    else { !nx.is_null() && nx.target() == model[l2][p + 1] }
-                } by {
-                splice_cache_node(*old(self), self, dst as int, src as int,
-                    hd.tail_spec(), hs.head_ref(), dst_empty, src_empty, l2, p);
-            }
-
-            // --- cache_ok heads/tails
-            assert forall|l2: int| 0 <= l2 < model.len() implies {
-                let hh = (#[trigger] heads[l2]).head_ref();
-                if model[l2].len() == 0 { hh.is_null() }
-                else { !hh.is_null() && hh.target() == model[l2][0] }
-            } by {
-                if l2 == src as int {
-                } else if l2 == dst as int {
-                    if old_model[dst as int].len() > 0 {
-                        assert(model[dst as int][0] == old_model[dst as int][0]);
-                    } else if old_model[src as int].len() > 0 {
-                        assert(model[dst as int][0] == old_model[src as int][0]);
-                    }
-                } else {
-                    assert(heads[l2] == old(self).heads_view()[l2]);
-                }
-            }
-            assert forall|l2: int| #![auto] 0 <= l2 < model.len() && model[l2].len() > 0 implies
-                heads[l2].tail_spec() == model[l2][model[l2].len() - 1] by {
-                if l2 == dst as int {
-                    if old_model[src as int].len() > 0 {
-                        assert(model[dst as int][model[dst as int].len() - 1]
-                            == old_model[src as int][old_model[src as int].len() - 1]);
-                    } else {
-                        assert(model[dst as int][model[dst as int].len() - 1]
-                            == old_model[dst as int][old_model[dst as int].len() - 1]);
-                    }
-                } else if l2 != src as int {
-                    assert(heads[l2] == old(self).heads_view()[l2]);
-                }
-            }
+            // --- disjoint and cache_ok: delegated whole (see the note at the
+            // top of the body). Each lemma unfolds the old state's predicate
+            // in its own context and hands the new state's back as a fact.
+            self.lemma_splice_disjoint_arena(*old(self), dst as int, src as int);
+            assert(heads[src as int].head_ref().is_null());  // ListHead::default()
+            self.lemma_splice_cache_ok(*old(self), dst as int, src as int,
+                hd.tail_spec(), hs.head_ref(), dst_empty, src_empty);
 
             // --- list_seq
             assert(self.list_seq(src as int) =~= Seq::<T>::empty());
@@ -1809,7 +1823,9 @@ where
                         nodes[model[m][p] as int].payload == old_nodes[old_model[m][p] as int].payload by {
                         assert(model[m][p] == old_model[m][p]);
                         // m's nodes are disjoint from dst's relinked tail.
-                        assert(dst_empty || model[m][p] != hd.tail_spec());
+                        if !dst_empty {
+                            old(self).lemma_disjoint_entries(m, p, dst as int, dlen - 1);
+                        }
                     }
                 }
             }
@@ -1835,67 +1851,140 @@ where
         }
     }
 
+    /// The cached ends of one list, as facts: what `splice_raw` needs from
+    /// `cache_ok` about `dst` and `src` without unfolding the predicate there.
+    proof fn lemma_cache_ends_at(&self, l: int)
+        requires self.wf(), 0 <= l < self.model@.len(),
+        ensures
+            self.model@[l].len() == 0 ==> self.heads_view()[l].head_ref().is_null(),
+            self.model@[l].len() > 0 ==> !self.heads_view()[l].head_ref().is_null()
+                && self.heads_view()[l].head_ref().target() == self.model@[l][0],
+            self.model@[l].len() > 0
+                ==> self.heads_view()[l].tail_spec() == self.model@[l][self.model@[l].len() - 1],
+            self.heads_view()[l].len_spec() == self.model@[l].len(),
+    {
+    }
+
+    /// Two distinct positions of the model hold distinct nodes: one instance
+    /// of `model_disjoint`, for bodies that keep the predicate hidden.
+    proof fn lemma_disjoint_entries(&self, l1: int, p1: int, l2: int, p2: int)
+        requires self.model_disjoint(),
+            0 <= l1 < self.model@.len(), 0 <= p1 < self.model@[l1].len(),
+            0 <= l2 < self.model@.len(), 0 <= p2 < self.model@[l2].len(),
+            !(l1 == l2 && p1 == p2),
+        ensures self.model@[l1][p1] != self.model@[l2][p2],
+    {
+    }
+
+    /// Splice disjointness at the arena level (the seq-level argument is
+    /// `lemma_splice_disjoint`): the old state's four-variable quantifier
+    /// unfolds only here, never in `splice_raw`.
+    #[verifier::spinoff_prover]
+    proof fn lemma_splice_disjoint_arena(&self, pre: Self, dst: int, src: int)
+        requires pre.model_disjoint(),
+            0 <= dst < pre.model@.len(), 0 <= src < pre.model@.len(), dst != src,
+            self.model@.len() == pre.model@.len(),
+            self.model@[dst] == pre.model@[dst] + pre.model@[src],
+            self.model@[src] == Seq::<usize>::empty(),
+            forall|m: int| 0 <= m < self.model@.len() && m != dst && m != src
+                ==> #[trigger] self.model@[m] == pre.model@[m],
+        ensures self.model_disjoint(),
+    {
+        lemma_splice_disjoint(pre.model@, self.model@, dst, src);
+    }
+
+    /// `cache_ok` after a splice: heads and tails from the old ends of `dst`
+    /// and `src`, `next` pointers node by node through `splice_cache_node`.
+    /// The old state's `cache_ok` (with its self-feeding `next` quantifier)
+    /// unfolds only in this small context.
+    #[verifier::spinoff_prover]
+    proof fn lemma_splice_cache_ok(&self, pre: Self, dst: int, src: int, dtail: usize,
+        shead: NodeRef, dst_empty: bool, src_empty: bool)
+        requires
+            pre.wf(),
+            0 <= dst < pre.model@.len(), 0 <= src < pre.model@.len(), dst != src,
+            self.model@.len() == pre.model@.len(),
+            self.nodes_view().len() == pre.nodes_view().len(),
+            self.heads_view().len() == pre.heads_view().len(),
+            self.model@[dst] == pre.model@[dst] + pre.model@[src],
+            self.model@[src] == Seq::<usize>::empty(),
+            forall|m: int| 0 <= m < self.model@.len() && m != dst && m != src
+                ==> #[trigger] self.model@[m] == pre.model@[m],
+            dst_empty == (pre.model@[dst].len() == 0),
+            src_empty == (pre.model@[src].len() == 0),
+            // nodes: only dtail relinked to shead (when both non-empty); else equal.
+            !dst_empty && !src_empty ==> {
+                &&& dtail == pre.model@[dst][pre.model@[dst].len() - 1]
+                &&& shead == pre.heads_view()[src].head_ref()
+                &&& self.nodes_view()[dtail as int].next_ref() == shead
+                &&& (forall|k: int| 0 <= k < self.nodes_view().len() && k != dtail as int
+                        ==> #[trigger] self.nodes_view()[k] == pre.nodes_view()[k])
+            },
+            (dst_empty || src_empty) ==>
+                (forall|k: int| 0 <= k < self.nodes_view().len()
+                    ==> #[trigger] self.nodes_view()[k] == pre.nodes_view()[k]),
+            // heads: src cleared; dst per case; every other header unchanged.
+            self.heads_view()[src].head_ref().is_null(),
+            forall|l: int| 0 <= l < self.heads_view().len() && l != dst && l != src
+                ==> #[trigger] self.heads_view()[l] == pre.heads_view()[l],
+            src_empty ==> self.heads_view()[dst] == pre.heads_view()[dst],
+            !src_empty && dst_empty ==>
+                self.heads_view()[dst].head_ref() == pre.heads_view()[src].head_ref()
+                && self.heads_view()[dst].tail_spec() == pre.heads_view()[src].tail_spec(),
+            !src_empty && !dst_empty ==>
+                self.heads_view()[dst].head_ref() == pre.heads_view()[dst].head_ref()
+                && self.heads_view()[dst].tail_spec() == pre.heads_view()[src].tail_spec(),
+        ensures self.cache_ok(),
+    {
+        let model = self.model@;
+        let old_model = pre.model@;
+        let nodes = self.nodes_view();
+        let heads = self.heads_view();
+        // --- nexts: node by node.
+        assert forall|l2: int, p: int|
+            0 <= l2 < model.len() && 0 <= p < model[l2].len() implies {
+                let nx = nodes[#[trigger] model[l2][p] as int].next_ref();
+                if p == model[l2].len() - 1 { nx.is_null() }
+                else { !nx.is_null() && nx.target() == model[l2][p + 1] }
+            } by {
+            splice_cache_node(pre, self, dst, src, dtail, shead, dst_empty, src_empty, l2, p);
+        }
+        // --- heads
+        assert forall|l2: int| 0 <= l2 < model.len() implies {
+            let hh = (#[trigger] heads[l2]).head_ref();
+            if model[l2].len() == 0 { hh.is_null() }
+            else { !hh.is_null() && hh.target() == model[l2][0] }
+        } by {
+            if l2 == src {
+            } else if l2 == dst {
+                if old_model[dst].len() > 0 {
+                    assert(model[dst][0] == old_model[dst][0]);
+                } else if old_model[src].len() > 0 {
+                    assert(model[dst][0] == old_model[src][0]);
+                }
+            } else {
+                assert(heads[l2] == pre.heads_view()[l2]);
+            }
+        }
+        // --- tails
+        assert forall|l2: int| #![auto] 0 <= l2 < model.len() && model[l2].len() > 0 implies
+            heads[l2].tail_spec() == model[l2][model[l2].len() - 1] by {
+            if l2 == dst {
+                if old_model[src].len() > 0 {
+                    assert(model[dst][model[dst].len() - 1]
+                        == old_model[src][old_model[src].len() - 1]);
+                } else {
+                    assert(model[dst][model[dst].len() - 1]
+                        == old_model[dst][old_model[dst].len() - 1]);
+                }
+            } else if l2 != src {
+                assert(heads[l2] == pre.heads_view()[l2]);
+            }
+        }
+    }
+
     // ---- semi-persistence: delegate to the two inner vectors ----
 
-    pub(crate) fn mark(&mut self, shrink: ShrinkPolicy) -> (token: ListArenaToken)
-        requires
-            old(self).wf(),
-            TRACK,
-            old(self).heads_view().len() < usize::MAX,
-            old(self).nodes_view().len() < usize::MAX,
-            old(self).heads_depth_spec() < u32::MAX,
-            old(self).nodes_depth_spec() < u32::MAX,
-        ensures
-            final(self).wf(),
-            final(self).heads_view() == old(self).heads_view(),
-            final(self).nodes_view() == old(self).nodes_view(),
-            final(self).model_view() == old(self).model_view(),
-            token.heads_frame_idx_spec() == old(self).heads_depth_spec(),
-            token.nodes_frame_idx_spec() == old(self).nodes_depth_spec(),
-            final(self).heads_snapshots_view()
-                == old(self).heads_snapshots_view().push(old(self).heads_view()),
-            final(self).nodes_snapshots_view()
-                == old(self).nodes_snapshots_view().push(old(self).nodes_view()),
-            final(self).model_snapshots_view()
-                == old(self).model_snapshots_view().push(old(self).model_view()),
-            token.heads_frame_idx_spec() == final(self).heads_snapshots_view().len() - 1,
-            token.nodes_frame_idx_spec() == final(self).nodes_snapshots_view().len() - 1,
-    {
-        let heads = self.heads.mark(shrink);
-        let nodes = self.nodes.mark(shrink);
-        // Archive the live model alongside the vec snapshots: the
-        // new frame's arena_model_wf obligation is exactly the live wf
-        // clauses over the just-pushed snapshot (== the live views).
-        self.model_snapshots = Ghost(self.model_snapshots@.push(self.model@));
-        proof {
-            reveal(arena_archive_agrees);
-            // Old-frame agreement (reveal the old(self) instance).
-            assert(arena_archive_agrees(old(self).model_snapshots@,
-                old(self).heads.snapshots_view(), old(self).nodes.snapshots_view()));
-            let k_new = self.model_snapshots@.len() - 1;
-            // The pushed frame archives the live views; the live wf clauses
-            // ARE arena_model_wf over them.
-            assert(self.heads.snapshots_view()[k_new] == old(self).heads_view());
-            assert(self.nodes.snapshots_view()[k_new] == old(self).nodes_view());
-            assert(arena_model_wf(self.model@,
-                self.heads.snapshots_view()[k_new], self.nodes.snapshots_view()[k_new]));
-            assert forall|k: int| 0 <= k < self.model_snapshots@.len()
-                implies arena_model_wf(
-                    #[trigger] self.model_snapshots@[k],
-                    self.heads.snapshots_view()[k], self.nodes.snapshots_view()[k]) by {
-                if k < k_new {
-                    assert(self.model_snapshots@[k] == old(self).model_snapshots@[k]);
-                    assert(self.heads.snapshots_view()[k]
-                        == old(self).heads.snapshots_view()[k]);
-                    assert(self.nodes.snapshots_view()[k]
-                        == old(self).nodes.snapshots_view()[k]);
-                }
-            }
-            assert(arena_archive_agrees(self.model_snapshots@,
-                self.heads.snapshots_view(), self.nodes.snapshots_view()));
-        }
-        ListArenaToken { heads, nodes }
-    }
 
     // ------------------------------------------------------------------
     // Total-operation shell.
@@ -1915,7 +2004,7 @@ where
             final(self).nodes_snapshots_view() == old(self).nodes_snapshots_view(),
             final(self).model_snapshots_view() == old(self).model_snapshots_view(),
     {
-        let n = self.heads.store.data.len();
+        let n = self.heads.store.raw_len();
         if n < usize::MAX - 1
             && L::try_new(n).is_some()
             && (L::bit_stealing() || L::try_new(n + 1).is_some())
@@ -1952,15 +2041,15 @@ where
             final(self).nodes_snapshots_view() == old(self).nodes_snapshots_view(),
             final(self).model_snapshots_view() == old(self).model_snapshots_view(),
     {
-        if !(l.to_usize() < self.heads.store.data.len()) {
+        let n = self.nodes.store.raw_len();
+        if !(l.to_usize() < self.heads.store.raw_len()) {
             return Err(crate::error::ContainerError::IndexOutOfBounds);
         }
-        let n = self.nodes.store.data.len();
         if n < usize::MAX - 1
             && N::try_new(n).is_some()
             && (N::bit_stealing() || N::try_new(n + 1).is_some())
         {
-            self.append(l, payload);
+            self.append(l, payload, n);
             Ok(())
         } else {
             Err(crate::error::ContainerError::CapacityExhausted)
@@ -1993,144 +2082,181 @@ where
             final(self).nodes_snapshots_view() == old(self).nodes_snapshots_view(),
             final(self).model_snapshots_view() == old(self).model_snapshots_view(),
     {
-        if !(l.to_usize() < self.heads.store.data.len()) {
+        if !(l.to_usize() < self.heads.store.raw_len()) {
             return Err(crate::error::ContainerError::IndexOutOfBounds);
         }
-        let n = self.nodes.store.data.len();
+        let n = self.nodes.store.raw_len();
         if n < usize::MAX - 1
             && N::try_new(n).is_some()
             && (N::bit_stealing() || N::try_new(n + 1).is_some())
         {
-            self.prepend(l, payload);
+            self.prepend(l, payload, n);
             Ok(())
         } else {
             Err(crate::error::ContainerError::CapacityExhausted)
         }
     }
 
-    /// Total mark.
-    pub fn try_mark(&mut self, shrink: ShrinkPolicy)
-        -> (r: Result<ListArenaToken, crate::error::ContainerError>)
-        requires old(self).wf(),
-        ensures
-            final(self).wf(),
-            r matches Ok(token) ==> {
-                &&& final(self).model_view() == old(self).model_view()
-                &&& final(self).heads_view() == old(self).heads_view()
-                &&& final(self).nodes_view() == old(self).nodes_view()
-                &&& token.heads_frame_idx_spec() == old(self).heads_depth_spec()
-                &&& token.nodes_frame_idx_spec() == old(self).nodes_depth_spec()
-                &&& final(self).heads_snapshots_view()
-                    == old(self).heads_snapshots_view().push(old(self).heads_view())
-                &&& final(self).nodes_snapshots_view()
-                    == old(self).nodes_snapshots_view().push(old(self).nodes_view())
-                &&& final(self).model_snapshots_view()
-                    == old(self).model_snapshots_view().push(old(self).model_view())
-                &&& token.heads_frame_idx_spec()
-                    == final(self).heads_snapshots_view().len() - 1
-                &&& token.nodes_frame_idx_spec()
-                    == final(self).nodes_snapshots_view().len() - 1
-            },
-            r is Err ==> final(self).model_view() == old(self).model_view(),
-    {
-        if !TRACK {
-            return Err(crate::error::ContainerError::Untracked);
-        }
-        let hn = self.heads.store.data.len();
-        let nn = self.nodes.store.data.len();
-        if !(hn < usize::MAX && nn < usize::MAX) {
-            return Err(crate::error::ContainerError::CapacityExhausted);
-        }
-        if !(self.heads.frames.len() < u32::MAX as usize
-            && self.nodes.frames.len() < u32::MAX as usize)
-        {
-            return Err(crate::error::ContainerError::DepthLimit);
-        }
-        Ok(self.mark(shrink))
-    }
 
-    /// Total restore: component restorability plus the same-mark frame
-    /// agreement (a mixed token from two different marks refuses).
-    pub fn try_restore(&mut self, token: ListArenaToken)
-        -> (r: Result<(), crate::error::ContainerError>)
-        requires old(self).wf(),
-        ensures
-            final(self).wf(),
-            r is Err ==> final(self).model_view() == old(self).model_view(),
-            r matches Err(e) ==> e == crate::error::ContainerError::InvalidToken,
-    {
-        if self.is_valid_token(&token)
-            && token.heads.frame_idx == token.nodes.frame_idx
-        {
-            self.restore(token);
-            Ok(())
-        } else {
-            Err(crate::error::ContainerError::InvalidToken)
-        }
-    }
 
-    /// Whether the composite token is restorable now.
-    pub fn is_valid_token(&self, token: &ListArenaToken) -> (b: bool)
-        requires self.wf(),
-        ensures b == self.is_restorable_spec(*token),
-    {
-        self.heads.is_valid_token(&token.heads) && self.nodes.is_valid_token(&token.nodes)
-    }
 
-    /// Restore both arenas to the marked snapshot. The restored snapshots must
-    /// jointly form a valid arena *for the current ghost model* — i.e. the
-    /// model still describes them (`arena_model_wf`). Semi-persistence composes
-    /// from the two inner `Vec`s.
-    pub(crate) fn restore(&mut self, token: ListArenaToken)
+
+
+
+    // ------------------------------------------------------------------
+    // Shared-history variants (doc 10): the two-member fan-out driven by one
+    // external History via push_frame/restore_frame, so the branch genealogy
+    // lives once instead of per member. Additive — ListArenaToken mark/restore
+    // and their theorems are untouched. The arena archive maintenance and its
+    // proof are the same as mark/restore (push_frame/restore_frame share the
+    // heads/nodes snapshot ensures); the synced-depth invariant is explicit.
+    #[allow(dead_code)]
+    pub(crate) fn push_frames(&mut self, shrink: ShrinkPolicy)
         requires
             old(self).wf(),
             TRACK,
-            old(self).restore_pre_spec(token),
-            // The two component tokens name the SAME mark: one mark pushes
-            // one frame on each vec (wf keeps the stacks in lockstep), so a
-            // genuine ListArenaToken always satisfies this; a mixed
-            // frankentoken does not.
-            token.heads_frame_idx_spec() == token.nodes_frame_idx_spec(),
+            old(self).heads_view().len() < usize::MAX,
+            old(self).nodes_view().len() < usize::MAX,
+            old(self).heads_depth_spec() < u32::MAX,
+            old(self).nodes_depth_spec() < u32::MAX,
+            old(self).heads_depth_spec() == old(self).nodes_depth_spec(),
         ensures
             final(self).wf(),
-            final(self).heads_view()
-                == old(self).heads_snapshots_view()[token.heads_frame_idx_spec() as int],
-            final(self).nodes_view()
-                == old(self).nodes_snapshots_view()[token.nodes_frame_idx_spec() as int],
-            // The restored model is the one archived at that mark and recovered
-            // internally, with no caller-supplied ghost.
-            final(self).model_view() == old(self).model_snapshots_view()[token.heads_frame_idx_spec() as int],
-            final(self).heads_snapshots_view() == old(self).heads_snapshots_view()
-                .subrange(0, token.heads_frame_idx_spec() as int),
-            final(self).nodes_snapshots_view() == old(self).nodes_snapshots_view()
-                .subrange(0, token.nodes_frame_idx_spec() as int),
-            final(self).model_snapshots_view() == old(self).model_snapshots_view()
-                .subrange(0, token.heads_frame_idx_spec() as int),
+            final(self).heads_view() == old(self).heads_view(),
+            final(self).nodes_view() == old(self).nodes_view(),
+            final(self).model_view() == old(self).model_view(),
+            final(self).heads_snapshots_view()
+                == old(self).heads_snapshots_view().push(old(self).heads_view()),
+            final(self).nodes_snapshots_view()
+                == old(self).nodes_snapshots_view().push(old(self).nodes_view()),
+            final(self).model_snapshots_view()
+                == old(self).model_snapshots_view().push(old(self).model_view()),
+            final(self).heads_depth_spec() == old(self).heads_depth_spec() + 1,
+            final(self).heads_depth_spec() == final(self).nodes_depth_spec(),
     {
-        // Prevalidate both constituent tokens before restoring either. Heads
-        // rolled back without nodes
-        // breaks the model invariants unrecoverably. Also pin the same-mark
-        // frame agreement at runtime (frankentoken defense; free for genuine
-        // tokens).
-        crate::guard::check_precondition(
-            self.is_valid_token(&token),
-            "ListArena::restore: invalid, foreign, stale, consumed, or abandoned token component",
-        );
-        crate::guard::check_precondition(
-            token.heads.frame_idx == token.nodes.frame_idx,
-            "ListArena::restore: token components name different marks",
-        );
-        let ghost snap_model = self.model_snapshots@[token.heads.frame_idx as int];
-        self.heads.restore(token.heads);
-        self.nodes.restore(token.nodes);
+        // Column lengths fit their index words (store `wf`, via its lemma).
+        proof {
+            self.heads.store.lemma_wf_data_len();
+            self.nodes.store.lemma_wf_data_len();
+        }
+        self.heads.push_frame(shrink);
+        self.nodes.push_frame(shrink);
+        self.model_snapshots = Ghost(self.model_snapshots@.push(self.model@));
+        proof {
+            reveal(arena_archive_agrees);
+            assert(arena_archive_agrees(old(self).model_snapshots@,
+                old(self).heads.snapshots_view(), old(self).nodes.snapshots_view()));
+            let k_new = self.model_snapshots@.len() - 1;
+            assert(self.heads.snapshots_view()[k_new] == old(self).heads_view());
+            assert(self.nodes.snapshots_view()[k_new] == old(self).nodes_view());
+            assert(arena_model_wf(self.model@,
+                self.heads.snapshots_view()[k_new], self.nodes.snapshots_view()[k_new]));
+            assert forall|k: int| 0 <= k < self.model_snapshots@.len()
+                implies arena_model_wf(
+                    #[trigger] self.model_snapshots@[k],
+                    self.heads.snapshots_view()[k], self.nodes.snapshots_view()[k]) by {
+                if k < k_new {
+                    assert(self.model_snapshots@[k] == old(self).model_snapshots@[k]);
+                    assert(self.heads.snapshots_view()[k]
+                        == old(self).heads.snapshots_view()[k]);
+                    assert(self.nodes.snapshots_view()[k]
+                        == old(self).nodes.snapshots_view()[k]);
+                }
+            }
+            assert(arena_archive_agrees(self.model_snapshots@,
+                self.heads.snapshots_view(), self.nodes.snapshots_view()));
+        }
+    }
+
+
+    #[allow(dead_code)]
+    pub(crate) fn restore_frames(&mut self, target: usize)
+        requires
+            old(self).wf(),
+            TRACK,
+            old(self).heads_depth_spec() == old(self).nodes_depth_spec(),
+            (target as nat) < old(self).heads_depth_spec(),
+        ensures
+            final(self).wf(),
+            final(self).heads_view() == old(self).heads_snapshots_view()[target as int],
+            final(self).nodes_view() == old(self).nodes_snapshots_view()[target as int],
+            final(self).model_view() == old(self).model_snapshots_view()[target as int],
+            final(self).heads_snapshots_view()
+                == old(self).heads_snapshots_view().subrange(0, target as int),
+            final(self).nodes_snapshots_view()
+                == old(self).nodes_snapshots_view().subrange(0, target as int),
+            final(self).model_snapshots_view()
+                == old(self).model_snapshots_view().subrange(0, target as int),
+            final(self).heads_depth_spec() == target as nat,
+            final(self).heads_depth_spec() == final(self).nodes_depth_spec(),
+    {
+        let ghost snap_model = self.model_snapshots@[target as int];
+        self.heads.restore_frame(target);
+        self.nodes.restore_frame(target);
+        self.model = Ghost(snap_model);
+        self.model_snapshots =
+            Ghost(self.model_snapshots@.subrange(0, target as int));
+        proof {
+            reveal(arena_archive_agrees);
+            let f = target as int;
+            assert(arena_archive_agrees(old(self).model_snapshots@,
+                old(self).heads.snapshots_view(), old(self).nodes.snapshots_view()));
+            assert(arena_model_wf(snap_model,
+                old(self).heads.snapshots_view()[f], old(self).nodes.snapshots_view()[f]));
+            assert(self.heads_view() == old(self).heads.snapshots_view()[f]);
+            assert(self.nodes_view() == old(self).nodes.snapshots_view()[f]);
+            assert(self.heads.snapshots_view()
+                =~= old(self).heads.snapshots_view().subrange(0, f));
+            assert(self.nodes.snapshots_view()
+                =~= old(self).nodes.snapshots_view().subrange(0, f));
+            assert forall|k: int| 0 <= k < self.model_snapshots@.len()
+                implies arena_model_wf(
+                    #[trigger] self.model_snapshots@[k],
+                    self.heads.snapshots_view()[k], self.nodes.snapshots_view()[k]) by {
+                assert(self.model_snapshots@[k] == old(self).model_snapshots@[k]);
+                assert(self.heads.snapshots_view()[k] == old(self).heads.snapshots_view()[k]);
+                assert(self.nodes.snapshots_view()[k] == old(self).nodes.snapshots_view()[k]);
+            }
+            assert(arena_archive_agrees(self.model_snapshots@,
+                self.heads.snapshots_view(), self.nodes.snapshots_view()));
+        }
+    }
+
+    /// Semantics B, token-free (what a typed group drives): reset both arenas
+    /// to their snapshot at `target`, keep frame `target` open, and recover
+    /// the model archived at that mark.
+    pub(crate) fn reset_frames(&mut self, target: usize)
+        requires
+            old(self).wf(),
+            TRACK,
+            old(self).heads_depth_spec() == old(self).nodes_depth_spec(),
+            (target as nat) < old(self).heads_depth_spec(),
+            old(self).heads_depth_spec() < u32::MAX,
+        ensures
+            final(self).wf(),
+            final(self).heads_view() == old(self).heads_snapshots_view()[target as int],
+            final(self).nodes_view() == old(self).nodes_snapshots_view()[target as int],
+            final(self).model_view() == old(self).model_snapshots_view()[target as int],
+            final(self).heads_snapshots_view()
+                == old(self).heads_snapshots_view().subrange(0, target as int + 1),
+            final(self).nodes_snapshots_view()
+                == old(self).nodes_snapshots_view().subrange(0, target as int + 1),
+            final(self).model_snapshots_view()
+                == old(self).model_snapshots_view().subrange(0, target as int + 1),
+            final(self).heads_depth_spec() == target as nat + 1,
+            final(self).heads_depth_spec() == final(self).nodes_depth_spec(),
+    {
+        let ghost snap_model = self.model_snapshots@[target as int];
+        self.heads.reset_frame(target);
+        self.nodes.reset_frame(target);
         self.model = Ghost(snap_model);
         // Truncate the archive in lockstep with the vec snapshot stacks
         // (restore leaves frames@.len() == frame_idx on both).
         self.model_snapshots =
-            Ghost(self.model_snapshots@.subrange(0, token.heads.frame_idx as int));
+            Ghost(self.model_snapshots@.subrange(0, target as int + 1));
         proof {
             reveal(arena_archive_agrees);
-            let f = token.heads.frame_idx as int;
+            let f = target as int;
             // Old-frame agreement (reveal the old(self) instance).
             assert(arena_archive_agrees(old(self).model_snapshots@,
                 old(self).heads.snapshots_view(), old(self).nodes.snapshots_view()));
@@ -2144,9 +2270,9 @@ where
             assert(self.nodes_view() == old(self).nodes.snapshots_view()[f]);
             // Truncated archive agrees frame-wise with the truncated stacks.
             assert(self.heads.snapshots_view()
-                =~= old(self).heads.snapshots_view().subrange(0, f));
+                =~= old(self).heads.snapshots_view().subrange(0, f + 1));
             assert(self.nodes.snapshots_view()
-                =~= old(self).nodes.snapshots_view().subrange(0, f));
+                =~= old(self).nodes.snapshots_view().subrange(0, f + 1));
             assert forall|k: int| 0 <= k < self.model_snapshots@.len()
                 implies arena_model_wf(
                     #[trigger] self.model_snapshots@[k],
@@ -2219,9 +2345,10 @@ where
 
     /// O(1) prepend through the typed handle.
     #[inline(always)]
-    pub(crate) fn prepend(&mut self, l: L, payload: T)
+    pub(crate) fn prepend(&mut self, l: L, payload: T, n: usize)
         requires
             old(self).wf(),
+            n == old(self).nodes_view().len(),
             l.id_nat() < old(self).model_view().len(),
             old(self).nodes_view().len() + 1 < usize::MAX,
             // node allocation stays within N's id range (production's
@@ -2255,15 +2382,9 @@ where
     {
         // Runtime guard: node-id headroom before allocating (N::try_new on
         // the fresh node row; reject-before-mutate).
-        crate::guard::check_precondition(
-            // The fresh slot's id must be representable
-            // (`try_new(n).is_some() <==> n < id_bound`); the full-range
-            // family alone also needs the successor representable
-            // (`lemma_node_push_fits` derives the word bound).
-            N::try_new(self.nodes_len()).is_some()
-                && (N::bit_stealing() || N::try_new(self.nodes_len() + 1).is_some()),
-            "ListArena::prepend: node-id range exhausted",
-        );
+        // The id-range facts are this function's `requires`; every caller proves
+        // them (the total `try_prepend` checks them once), so nothing is re-read or
+        // re-checked here.
         let lu = l.as_usize();
         proof {
             l.lemma_as_nat_is_id_nat();  // as_usize ensures as_nat; bridge to id_nat. prod-parity
@@ -2271,14 +2392,15 @@ where
             assert(self.model_view()[lu as int]
                 =~= self.model_view()[l.id_nat() as int]);
         }
-        self.prepend_raw(lu, payload)
+        self.prepend_raw(lu, payload, n)
     }
 
     /// O(1) append through the typed handle (cached tail).
     #[inline(always)]
-    pub(crate) fn append(&mut self, l: L, payload: T)
+    pub(crate) fn append(&mut self, l: L, payload: T, n: usize)
         requires
             old(self).wf(),
+            n == old(self).nodes_view().len(),
             l.id_nat() < old(self).model_view().len(),
             old(self).nodes_view().len() + 1 < usize::MAX,
             // node allocation stays within N's id range; see `prepend`.
@@ -2306,13 +2428,11 @@ where
             final(self).nodes_view()[old(self).nodes_view().len() as int].payload == payload,
     {
         // Runtime guard: node-id headroom before allocating; see `prepend`.
-        crate::guard::check_precondition(
-            N::try_new(self.nodes_len()).is_some()
-                && (N::bit_stealing() || N::try_new(self.nodes_len() + 1).is_some()),
-            "ListArena::append: node-id range exhausted",
-        );
+        // The id-range facts are this function's `requires`; every caller proves
+        // them (the total `try_append` checks them once), so nothing is re-read or
+        // re-checked here.
         proof { l.lemma_as_nat_is_id_nat(); }  // as_usize -> id_nat bridge. prod-parity
-        self.append_raw(l.as_usize(), payload)
+        self.append_raw(l.as_usize(), payload, n)
     }
 
     /// O(1) verified length through the typed handle.
@@ -2330,7 +2450,7 @@ where
     {
         proof { l.lemma_as_nat_is_id_nat(); }  // prod-parity
         // Total-with-documented-panic: explicit handle-bound branch.
-        if !(l.as_usize() < self.heads.store.data.len()) {
+        if !(l.as_usize() < self.heads.store.raw_len()) {
             crate::guard::refuse("ListArena::len: list handle out of range");
         }
         self.len_raw(l.as_usize())
@@ -2342,37 +2462,10 @@ where
     {
         proof { l.lemma_as_nat_is_id_nat(); }  // prod-parity
         // Total-with-documented-panic: explicit handle-bound branch.
-        if !(l.as_usize() < self.heads.store.data.len()) {
+        if !(l.as_usize() < self.heads.store.raw_len()) {
             crate::guard::refuse("ListArena::is_empty: list handle out of range");
         }
         self.is_empty_raw(l.as_usize())
-    }
-
-    /// Bytes consumed by diff tracking only, summed over the two inner vecs.
-    /// Diagnostic, no spec content — the same pair production exposes on every
-    /// container (`containers/src/vec.rs`). Used by the store-choice memory
-    /// exception in `containers-conformance/tests/layout_parity.rs`.
-    /// `external_body`: the sum is an unmodeled capacity diagnostic (like
-    /// `Vec::tracking_bytes`), so the overflow obligation on `+` is not proof
-    /// content — a real footprint never approaches `usize::MAX`.
-    #[verifier::external_body]
-    pub fn tracking_bytes(&self) -> usize {
-        self.heads.tracking_bytes() + self.nodes.tracking_bytes()
-    }
-
-    /// Total bytes: both inner vecs (struct + store backing + tracking). The
-    /// ghost `model`/`model_snapshots` fields are erased, so this is the whole
-    /// runtime footprint. Diagnostic; no spec content.
-    ///
-    /// This is the number memory parity with production is measured through
-    /// (`containers-conformance/tests/list_arena_differential.rs`). Both sides
-    /// use `InlineStore` over `L::Index`/`N::Index` columns, so elements, capture
-    /// flags and diff-log entries are all the same width; the only residual delta
-    /// is a constant 16 bytes from the `u64` `ContainerId`.
-    /// `external_body`: unmodeled capacity diagnostic (see `tracking_bytes`).
-    #[verifier::external_body]
-    pub fn total_bytes(&self) -> usize {
-        self.heads.total_bytes() + self.nodes.total_bytes()
     }
 
     /// O(1) splice through typed handles: `dst := dst ++ src`, `src` cleared
@@ -2424,7 +2517,7 @@ where
         // Total-with-documented-panic: handle bounds and the same-handle case
         // are explicit branches (the same-handle splice would corrupt the
         // list; formerly a check_precondition on an erased requires).
-        let hn = self.heads.store.data.len();
+        let hn = self.heads.store.raw_len();
         if !(du < hn && su < hn) {
             crate::guard::refuse("ListArena::splice: list handle out of range");
         }
@@ -2436,7 +2529,7 @@ where
 
     /// Iterate list `l` in order, yielding payloads by value (production
     /// `ListIter` parity).
-    pub fn iter(&self, l: L) -> (it: ListIter<'_, T, L, N, TRACK>)
+    pub fn iter(&self, l: L) -> (it: ListIter<'_, T, L, N, TRACK, P>)
         requires self.wf(),
         ensures l.id_nat() < self.model_view().len() ==> ({
             &&& it.arena_ref() == self
@@ -2447,7 +2540,7 @@ where
     {
         proof { l.lemma_as_nat_is_id_nat(); }  // prod-parity
         // Total-with-documented-panic: handle-bound branch.
-        if !(l.as_usize() < self.heads.store.data.len()) {
+        if !(l.as_usize() < self.heads.store.raw_len()) {
             crate::guard::refuse("ListArena::iter: list handle out of range");
         }
         let lu = l.as_usize();
@@ -2471,13 +2564,14 @@ where
 /// node, step the cursor along the verified `next` cache (which `wf`'s
 /// `cache_ok` ties to the model). The invariant `cursor_ok` is exactly
 /// "`cur` names `model[list][pos]` (or `pos == len` and the cursor is exhausted)".
-pub struct ListIter<'a, T, L, N, const TRACK: bool>
+pub struct ListIter<'a, T, L, N, const TRACK: bool, P = HotFirst>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
-    pub(crate) arena: &'a ListArena<T, L, N, TRACK>,
+    pub(crate) arena: &'a ListArena<T, L, N, TRACK, P>,
     /// The raw list row; read only by spec code (plain builds erase it).
     #[allow(dead_code)]
     pub(crate) list: usize,
@@ -2487,15 +2581,16 @@ where
     pub(crate) cur: NodeRef,
 }
 
-impl<'a, T, L, N, const TRACK: bool> ListIter<'a, T, L, N, TRACK>
+impl<'a, T, L, N, const TRACK: bool, P> ListIter<'a, T, L, N, TRACK, P>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
     /// The arena this iterator walks (spec counterpart; fields are `pub(crate)` —
     /// privacy closeout).
-    pub open(crate) spec fn arena_ref(&self) -> &'a ListArena<T, L, N, TRACK> {
+    pub open(crate) spec fn arena_ref(&self) -> &'a ListArena<T, L, N, TRACK, P> {
         self.arena
     }
 
@@ -2547,7 +2642,7 @@ where
             }),
     {
         // Total-with-documented-panic: stale-handle branch.
-        if !(self.list < self.arena.heads.store.data.len()) {
+        if !(self.list < self.arena.heads.store.raw_len()) {
             crate::guard::refuse("ListIter::next: list handle out of range");
         }
         let ghost m = self.arena.model_view()[self.list as int];
@@ -2785,8 +2880,8 @@ pub(crate) proof fn lemma_insert_fresh_disjoint(
 
 /// Cache-consistency of a single node's `next` after `splice`. Only `dst`'s old
 /// tail node was relinked (to `src`'s head); all others are unchanged.
-pub(crate) proof fn splice_cache_node<T, L, N, const TRACK: bool>(
-    pre: ListArena<T, L, N, TRACK>, post: &ListArena<T, L, N, TRACK>,
+pub(crate) proof fn splice_cache_node<T, L, N, const TRACK: bool, P>(
+    pre: ListArena<T, L, N, TRACK, P>, post: &ListArena<T, L, N, TRACK, P>,
     dst: int, src: int, dtail: usize, shead: NodeRef,
     dst_empty: bool, src_empty: bool, l2: int, p: int,
 )
@@ -2794,6 +2889,7 @@ pub(crate) proof fn splice_cache_node<T, L, N, const TRACK: bool>(
         T: Sized + Copy + core::default::Default + Tagged,
         L: DenseId,
         N: DenseId + Tagged + core::default::Default,
+        P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
     requires
         pre.wf(),
         0 <= dst < pre.model_view().len(),
@@ -2881,14 +2977,21 @@ pub(crate) proof fn splice_cache_node<T, L, N, const TRACK: bool>(
 
 } // verus!
 
-// prod-parity: production derives `Debug` on `ListArenaToken`; manual here
-// (composes two `VecToken`s, now `Debug`).
-impl core::fmt::Debug for ListArenaToken {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ListArenaToken")
-            .field("heads", &self.heads)
-            .field("nodes", &self.nodes)
-            .finish()
+// ---------------------------------------------------------------------------
+// Read-only white-box accessor — OUTSIDE the verified perimeter: it unpacks a
+// head for tests and nothing verified calls it, so it is neither proved nor
+// trusted (see `diagnostics.rs` for the same stratification).
+// ---------------------------------------------------------------------------
+impl<N: DenseId + Tagged + core::default::Default> ListHead<N> {
+    /// Read-only unpacked head for white-box tests.
+    #[doc(hidden)]
+    pub fn white_box_head(&self) -> Option<usize> {
+        let o = crate::opt::Opt::<N>::from_raw(self.head_repr);
+        if o.is_none() {
+            None
+        } else {
+            Some(o.get().as_usize())
+        }
     }
 }
 
@@ -2910,17 +3013,23 @@ impl<T, N: DenseId + Tagged + core::default::Default> ListNode<T, N> {
     }
 }
 
-impl<T, L, N, const TRACK: bool> ListArena<T, L, N, TRACK>
+impl<T, L, N, const TRACK: bool, P> ListArena<T, L, N, TRACK, P>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
     /// Read-only heads-column access for white-box tests.
     #[doc(hidden)]
     pub fn white_box_heads(
         &self,
-    ) -> &SpVec<ListHead<N>, L::Index, InlineStore<ListHead<N>, L::Index>, TRACK> {
+    ) -> &SpVec<
+        ListHead<N>,
+        L::Index,
+        <P as TaggedFamily<ListHead<N>, L::Index, TRACK>>::Store,
+        TRACK,
+    > {
         &self.heads
     }
 
@@ -2928,7 +3037,12 @@ where
     #[doc(hidden)]
     pub fn white_box_nodes(
         &self,
-    ) -> &SpVec<ListNode<T, N>, N::Index, InlineStore<ListNode<T, N>, N::Index>, TRACK> {
+    ) -> &SpVec<
+        ListNode<T, N>,
+        N::Index,
+        <P as TaggedFamily<ListNode<T, N>, N::Index, TRACK>>::Store,
+        TRACK,
+    > {
         &self.nodes
     }
 }
@@ -2938,11 +3052,12 @@ where
 // 1-line delegation to the verified inherent `next`.
 // ---------------------------------------------------------------------------
 
-impl<'a, T, L, N, const TRACK: bool> Iterator for ListIter<'a, T, L, N, TRACK>
+impl<'a, T, L, N, const TRACK: bool, P> Iterator for ListIter<'a, T, L, N, TRACK, P>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: crate::opt::DenseId,
     N: crate::opt::DenseId + crate::tagged::Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
     type Item = T;
 
@@ -2953,13 +3068,255 @@ where
 }
 
 // Production-surface parity (production ships Default).
-impl<T, L, N, const TRACK: bool> Default for ListArena<T, L, N, TRACK>
+impl<T, L, N, const TRACK: bool, P> Default for ListArena<T, L, N, TRACK, P>
 where
     T: Sized + Copy + core::default::Default + Tagged,
     L: DenseId,
     N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Byte reporters — OUTSIDE the verified perimeter (stratified; see
+// `diagnostics.rs`).
+impl<T, L, N, const TRACK: bool, P> ListArena<T, L, N, TRACK, P>
+where
+    T: Sized + Copy + core::default::Default + Tagged,
+    L: DenseId,
+    N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
+{
+    /// Tracking bytes of both columns (capacity-based; read-only).
+    pub fn tracking_bytes(&self) -> usize {
+        self.heads.tracking_bytes() + self.nodes.tracking_bytes()
+    }
+}
+
+impl<T, L, N, const TRACK: bool, P> ListArena<T, L, N, TRACK, P>
+where
+    T: Sized + Copy + core::default::Default + Tagged,
+    L: DenseId,
+    N: DenseId + Tagged + core::default::Default,
+    P: TaggedFamily<ListHead<N>, L::Index, TRACK> + TaggedFamily<ListNode<T, N>, N::Index, TRACK>,
+    <P as TaggedFamily<ListHead<N>, L::Index, TRACK>>::Store: crate::diagnostics::HeapBytes,
+    <P as TaggedFamily<ListNode<T, N>, N::Index, TRACK>>::Store: crate::diagnostics::HeapBytes,
+{
+    /// Whole footprint of both columns (read-only).
+    pub fn total_bytes(&self) -> usize {
+        self.heads.total_bytes() + self.nodes.total_bytes()
+    }
+}
+
+#[cfg(test)]
+mod append_edge_tests {
+    //! Edge cases of the append path: the head update on an empty list, the
+    //! tail relink on a non-empty one, node-column growth under the validated
+    //! count threaded from `try_append`, and an open tracked frame restored
+    //! across appends.
+    use super::ListArena;
+    use crate::group::ForkHistory;
+    use crate::vec::ShrinkPolicy;
+
+    crate::define_id31! { pub struct TElem / StoredTElem, "e"; }
+    crate::define_id31! { pub struct TList / StoredTList, "l"; }
+    crate::define_id31! { pub struct TNode / StoredTNode, "n"; }
+
+    type Arena = ForkHistory<ListArena<TElem, TList, TNode, true>>;
+
+    fn arena() -> Arena {
+        ForkHistory::new(ListArena::new())
+    }
+
+    fn read(a: &Arena, l: TList) -> std::vec::Vec<u32> {
+        a.iter(l).map(|e| e.raw()).collect()
+    }
+
+    #[test]
+    fn append_to_empty_sets_head_and_tail() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        assert_eq!(read(&a, l), Vec::<u32>::new());
+        a.try_append(l, TElem::new(7)).expect("append to empty");
+        assert_eq!(read(&a, l), vec![7]);
+        assert_eq!(a.len(l), 1);
+    }
+
+    #[test]
+    fn append_to_non_empty_relinks_tail() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        for v in 1..=5u32 {
+            a.try_append(l, TElem::new(v)).expect("append");
+        }
+        assert_eq!(read(&a, l), vec![1, 2, 3, 4, 5]);
+        assert_eq!(a.len(l), 5);
+    }
+
+    #[test]
+    fn append_across_node_column_growth() {
+        // Interleaved appends on three lists across many column growths; the
+        // threaded count must equal the live count at every push.
+        let mut a = arena();
+        let ls: std::vec::Vec<TList> = (0..3).map(|_| a.try_new_list().expect("list id")).collect();
+        let mut want: std::vec::Vec<std::vec::Vec<u32>> = vec![vec![]; 3];
+        for i in 0..5000u32 {
+            let k = (i % 3) as usize;
+            a.try_append(ls[k], TElem::new(i))
+                .expect("append across growth");
+            want[k].push(i);
+        }
+        for k in 0..3 {
+            assert_eq!(read(&a, ls[k]), want[k]);
+            assert_eq!(a.len(ls[k]) as usize, want[k].len());
+        }
+    }
+
+    #[test]
+    fn append_under_open_tracked_frame_then_restore() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        for v in 1..=3u32 {
+            a.try_append(l, TElem::new(v)).expect("append before mark");
+        }
+        let t = a.mark(ShrinkPolicy::Never).expect("mark");
+        for v in 4..=300u32 {
+            a.try_append(l, TElem::new(v))
+                .expect("append under open frame");
+        }
+        assert_eq!(read(&a, l).len(), 300);
+        assert!(a.restore(t), "own live token");
+        assert_eq!(read(&a, l), vec![1, 2, 3]);
+        assert_eq!(a.len(l), 3);
+        // The list is appendable again after the restore.
+        a.try_append(l, TElem::new(9))
+            .expect("append after restore");
+        assert_eq!(read(&a, l), vec![1, 2, 3, 9]);
+    }
+    #[test]
+    fn prepend_to_empty_sets_head_and_tail() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        a.try_prepend(l, TElem::new(7)).expect("prepend to empty");
+        assert_eq!(read(&a, l), vec![7]);
+        assert_eq!(a.len(l), 1);
+    }
+
+    #[test]
+    fn prepend_to_non_empty_links_old_head() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        for v in 1..=5u32 {
+            a.try_prepend(l, TElem::new(v)).expect("prepend");
+        }
+        assert_eq!(read(&a, l), vec![5, 4, 3, 2, 1]);
+        assert_eq!(a.len(l), 5);
+    }
+
+    #[test]
+    fn prepend_across_node_column_growth() {
+        let mut a = arena();
+        let ls: std::vec::Vec<TList> = (0..3).map(|_| a.try_new_list().expect("list id")).collect();
+        let mut want: std::vec::Vec<std::vec::Vec<u32>> = vec![vec![]; 3];
+        for i in 0..5000u32 {
+            let k = (i % 3) as usize;
+            a.try_prepend(ls[k], TElem::new(i))
+                .expect("prepend across growth");
+            want[k].insert(0, i);
+        }
+        for k in 0..3 {
+            assert_eq!(read(&a, ls[k]), want[k]);
+            assert_eq!(a.len(ls[k]) as usize, want[k].len());
+        }
+    }
+
+    #[test]
+    fn prepend_under_open_tracked_frame_then_restore() {
+        let mut a = arena();
+        let l = a.try_new_list().expect("list id");
+        for v in 1..=3u32 {
+            a.try_append(l, TElem::new(v)).expect("append before mark");
+        }
+        let t = a.mark(ShrinkPolicy::Never).expect("mark");
+        for v in 4..=300u32 {
+            a.try_prepend(l, TElem::new(v))
+                .expect("prepend under open frame");
+        }
+        assert_eq!(read(&a, l).len(), 300);
+        assert_eq!(read(&a, l)[0], 300);
+        assert!(a.restore(t), "own live token");
+        assert_eq!(read(&a, l), vec![1, 2, 3]);
+        a.try_prepend(l, TElem::new(9))
+            .expect("prepend after restore");
+        assert_eq!(read(&a, l), vec![9, 1, 2, 3]);
+    }
+
+    fn filled(a: &mut Arena, vals: &[u32]) -> TList {
+        let l = a.try_new_list().expect("list id");
+        for &v in vals {
+            a.try_append(l, TElem::new(v)).expect("append");
+        }
+        l
+    }
+
+    #[test]
+    fn splice_empty_into_non_empty() {
+        let mut a = arena();
+        let dst = filled(&mut a, &[1, 2, 3]);
+        let src = filled(&mut a, &[]);
+        a.splice(dst, src);
+        assert_eq!(read(&a, dst), vec![1, 2, 3]);
+        assert_eq!(read(&a, src), Vec::<u32>::new());
+        assert_eq!(a.len(dst), 3);
+        assert_eq!(a.len(src), 0);
+    }
+
+    #[test]
+    fn splice_non_empty_into_empty() {
+        let mut a = arena();
+        let dst = filled(&mut a, &[]);
+        let src = filled(&mut a, &[4, 5]);
+        a.splice(dst, src);
+        assert_eq!(read(&a, dst), vec![4, 5]);
+        assert_eq!(read(&a, src), Vec::<u32>::new());
+        assert_eq!(a.len(dst), 2);
+        // dst is appendable and prependable after the takeover.
+        a.try_append(dst, TElem::new(6))
+            .expect("append after splice");
+        a.try_prepend(dst, TElem::new(3))
+            .expect("prepend after splice");
+        assert_eq!(read(&a, dst), vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn splice_both_non_empty_relinks_tail() {
+        let mut a = arena();
+        let dst = filled(&mut a, &[1, 2]);
+        let src = filled(&mut a, &[3, 4, 5]);
+        a.splice(dst, src);
+        assert_eq!(read(&a, dst), vec![1, 2, 3, 4, 5]);
+        assert_eq!(read(&a, src), Vec::<u32>::new());
+        a.try_append(dst, TElem::new(6))
+            .expect("append after splice");
+        assert_eq!(read(&a, dst), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(a.len(dst), 6);
+    }
+
+    #[test]
+    fn splice_under_open_tracked_frame_then_restore() {
+        let mut a = arena();
+        let dst = filled(&mut a, &[1, 2]);
+        let src = filled(&mut a, &[3, 4]);
+        let t = a.mark(ShrinkPolicy::Never).expect("mark");
+        a.splice(dst, src);
+        assert_eq!(read(&a, dst), vec![1, 2, 3, 4]);
+        assert_eq!(read(&a, src), Vec::<u32>::new());
+        assert!(a.restore(t), "own live token");
+        assert_eq!(read(&a, dst), vec![1, 2]);
+        assert_eq!(read(&a, src), vec![3, 4]);
+        assert_eq!(a.len(dst), 2);
+        assert_eq!(a.len(src), 2);
     }
 }

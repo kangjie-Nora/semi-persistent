@@ -15,6 +15,9 @@
 //! - `class_ring/*`: isolated untracked splice/traversal and tracked
 //!   merge/restore for the ring protocol inside the class layer. Aggregate
 //!   retained-vs-verified measurements live in `eclasses_bench`.
+//! - `map/intern*`: the interner pattern (insert-or-hit) over the key shapes
+//!   the consumers use; `map/restore_small_suffix*`: a large live map with a
+//!   few inserts per frame and a restore — the SMT-style mark/backtrack use.
 //!
 //! Criterion supplies warm-up, adaptive iteration counts, outlier analysis,
 //! and bootstrap confidence intervals. Results remain host- and revision-bound:
@@ -25,6 +28,7 @@
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
+use verus::group::ForkHistory;
 
 use containers_conformance::prod_class_ring::{self as pring, PNodeId};
 use semi_persistent_containers as prod;
@@ -51,7 +55,7 @@ const RING_MERGES: usize = RING_N / 2;
 const RING_WALK_PASSES: usize = 8;
 
 type VerusTrackedVec =
-    verus::vec::Vec<u64, u32, verus::parallel_store::ParallelStore<u64, u32>, true>;
+    ForkHistory<verus::vec::Vec<u64, u32, verus::parallel_store::ParallelStore<u64, u32>, true>>;
 type VerusRing<const TRACK: bool> = verus::CircularList<verus::Opt<VRingKey>, VRingNode, TRACK>;
 
 // ---------------------------------------------------------------------------
@@ -129,10 +133,17 @@ fn bench_vec_mark_set_restore(c: &mut Criterion) {
     });
 
     g.bench_function("verified", |b| {
-        type V = verus::vec::Vec<u64, u32, verus::parallel_store::ParallelStore<u64, u32>, true>;
+        type V = ForkHistory<
+            verus::vec::Vec<u64, u32, verus::parallel_store::ParallelStore<u64, u32>, true>,
+        >;
         b.iter_batched_ref(
             || {
-                let mut v: V = V::new();
+                let mut v: V = ForkHistory::new(verus::vec::Vec::<
+                    u64,
+                    u32,
+                    verus::parallel_store::ParallelStore<u64, u32>,
+                    true,
+                >::new());
                 for i in 0..VEC_N {
                     v.try_push(i as u64).expect("push: within index word");
                 }
@@ -140,7 +151,7 @@ fn bench_vec_mark_set_restore(c: &mut Criterion) {
             },
             |v| {
                 let tok = v
-                    .try_mark(verus::vec::ShrinkPolicy::Never)
+                    .mark(verus::vec::ShrinkPolicy::Never)
                     .expect("mark: depth bounded by this harness");
                 let mut x: u64 = 0x9E3779B97F4A7C15;
                 for _ in 0..VEC_TOUCHES {
@@ -150,7 +161,8 @@ fn bench_vec_mark_set_restore(c: &mut Criterion) {
                     let idx = (x % VEC_N as u64) as u32;
                     v.set(idx, x);
                 }
-                v.try_restore(tok).expect("restore: own token");
+                // Legacy restore == verified restore_and_pop (restore + pop_scope fused; design doc 08 §1).
+                assert!(v.restore_and_pop(tok), "restore: own token");
                 black_box(v.len());
             },
             BatchSize::LargeInput,
@@ -183,20 +195,25 @@ fn prod_restore_fixture() -> (prod::VecP<u64, u32, true>, prod::VecToken) {
 }
 
 fn verus_restore_fixture() -> (VerusTrackedVec, verus::vec::VecToken) {
-    let mut v = VerusTrackedVec::new();
+    let mut v: VerusTrackedVec = ForkHistory::new(verus::vec::Vec::<
+        u64,
+        u32,
+        verus::parallel_store::ParallelStore<u64, u32>,
+        true,
+    >::new());
     for i in 0..VEC_N {
         v.try_push(i as u64).expect("push: within index word");
     }
     let warm = v
-        .try_mark(verus::vec::ShrinkPolicy::Never)
+        .mark(verus::vec::ShrinkPolicy::Never)
         .expect("mark: bounded depth");
     for i in 0..VEC_TOUCHES {
         v.set(i as u32, i as u64);
     }
-    v.try_restore(warm).expect("restore: own token");
+    assert!(v.restore_and_pop(warm), "restore: own token");
 
     let token = v
-        .try_mark(verus::vec::ShrinkPolicy::Never)
+        .mark(verus::vec::ShrinkPolicy::Never)
         .expect("mark: bounded depth");
     for i in 0..VEC_TOUCHES {
         v.set(i as u32, (i + 999) as u64);
@@ -236,7 +253,7 @@ fn bench_vec_restore_replay(c: &mut Criterion) {
             |fixtures| {
                 let mut total = 0usize;
                 for (v, token) in fixtures.iter_mut() {
-                    v.try_restore(*token).expect("restore: own token");
+                    assert!(v.restore_and_pop(*token), "restore: own token");
                     total += v.len() as usize;
                 }
                 black_box(total)
@@ -450,12 +467,18 @@ fn verus_ring_merge_all<const TRACK: bool>(ring: &mut VerusRing<TRACK>) {
 fn bench_class_ring_splice(c: &mut Criterion) {
     let mut g = c.benchmark_group("class_ring/splice_untracked");
 
+    // The merged structure must be OBSERVED, or the untracked pointer swaps
+    // are dead stores into a buffer the batch drops right after and LLVM
+    // elides them (measured: ~0.6 ns per splice on both sides, physically
+    // impossible for two loads and two stores). One ring walk from a
+    // black-boxed node keeps every swap alive on both sides at O(ring) cost.
     g.bench_function("legacy", |b| {
         b.iter_batched_ref(
             prod_ring_build::<false>,
             |ring| {
                 prod_ring_merge_all(ring);
-                black_box(ring.len())
+                let probe = prod_ring_ids(black_box(RING_MERGES / 2)).0;
+                black_box((ring.len(), pring::walk(ring, probe)))
             },
             BatchSize::LargeInput,
         )
@@ -466,7 +489,8 @@ fn bench_class_ring_splice(c: &mut Criterion) {
             verus_ring_build::<false>,
             |ring| {
                 verus_ring_merge_all(ring);
-                black_box(ring.len())
+                let probe = verus_ring_ids(black_box(RING_MERGES / 2)).0;
+                black_box((ring.len(), ring.iter_class(probe).count()))
             },
             BatchSize::LargeInput,
         )
@@ -530,7 +554,7 @@ fn bench_class_ring_merge_restore(c: &mut Criterion) {
             |ring| {
                 let token = ring.mark(prod::ShrinkPolicy::Never);
                 prod_ring_merge_all(ring);
-                ring.try_restore(token).expect("restore: own token");
+                ring.restore(token);
                 black_box(ring.len())
             },
             BatchSize::LargeInput,
@@ -539,13 +563,13 @@ fn bench_class_ring_merge_restore(c: &mut Criterion) {
 
     g.bench_function("verified", |b| {
         b.iter_batched_ref(
-            verus_ring_build::<true>,
+            || ForkHistory::new(verus_ring_build::<true>()),
             |ring| {
                 let token = ring
-                    .try_mark(verus::vec::ShrinkPolicy::Never)
+                    .mark(verus::vec::ShrinkPolicy::Never)
                     .expect("mark: bounded depth");
                 verus_ring_merge_all(ring);
-                ring.try_restore(token).expect("restore: own token");
+                assert!(ring.restore_and_pop(token), "restore: own token");
                 black_box(ring.len())
             },
             BatchSize::LargeInput,
@@ -598,7 +622,8 @@ fn bench_map_intern(c: &mut Criterion) {
 
     g.bench_function("verified", |b| {
         b.iter(|| {
-            let mut m: verus::SpMap<u64, (), usize, true> = verus::SpMap::new();
+            let mut m: ForkHistory<verus::SpMap<u64, (), usize, true>> =
+                ForkHistory::new(verus::SpMap::new());
             let mut x: u64 = 0x243F_6A88_85A3_08D3;
             let tok = {
                 for _ in 0..N / 2 {
@@ -610,7 +635,7 @@ fn bench_map_intern(c: &mut Criterion) {
                         m.try_insert(key, ()).expect("insert: within index word");
                     }
                 }
-                m.try_mark(verus::ShrinkPolicy::Never)
+                m.mark(verus::ShrinkPolicy::Never)
                     .expect("mark: depth bounded by this harness")
             };
             for _ in 0..N / 2 {
@@ -622,7 +647,7 @@ fn bench_map_intern(c: &mut Criterion) {
                     m.try_insert(key, ()).expect("insert: within index word");
                 }
             }
-            m.try_restore(tok).expect("restore: own token");
+            assert!(m.restore_and_pop(tok), "restore: own token");
             black_box(m.len())
         })
     });
@@ -668,14 +693,15 @@ fn bench_sparse_set_churn(c: &mut Criterion) {
 
     g.bench_function("verified", |b| {
         b.iter(|| {
-            let mut s: verus::SparseSet<u64, VElem, verus::ParallelStore<u64, VElem>, true> =
-                verus::SparseSet::new();
+            let mut s: ForkHistory<
+                verus::SparseSet<u64, VElem, verus::ParallelStore<u64, VElem>, true>,
+            > = ForkHistory::new(verus::SparseSet::new());
             let mut ids = Vec::with_capacity(N);
             for i in 0..N {
                 ids.push(s.try_add(i as u64).expect("add: within id space"));
             }
             let tok = s
-                .try_mark(verus::ShrinkPolicy::Never)
+                .mark(verus::ShrinkPolicy::Never)
                 .expect("mark: depth bounded by this harness");
             let mut x: u64 = 0xB5297A4D;
             for _ in 0..N / 2 {
@@ -690,7 +716,226 @@ fn bench_sparse_set_churn(c: &mut Criterion) {
                     ids[k] = s.try_add(x).expect("add: within id space");
                 }
             }
+            assert!(s.restore_and_pop(tok), "restore: own token");
+            black_box(s.len().raw())
+        })
+    });
+
+    g.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Opaque-input variants (design chapter 20, validation protocol). The plan is
+// generated once from a seed, laundered through `black_box` at the group
+// boundary so LLVM cannot specialise on the literal sizes, and shared by both
+// arms. One `black_box` on the final checksum keeps the work alive; nothing
+// inside the loops is pinned.
+// ---------------------------------------------------------------------------
+
+/// One append plan: `lists` lists of `per_list` appends each, the fixed row's
+/// loop nest with the trip counts and payloads opaque. (A flat op sequence or
+/// a random list order is a different program: no loop to peel, or a
+/// memory-bound loop whose time moves 30 per cent with placement alone.)
+struct ListPlan {
+    lists: usize,
+    per_list: usize,
+    payloads: Vec<u32>,
+}
+
+fn list_plan(seed: u64, lists: usize, per_list: usize) -> ListPlan {
+    let mut rng = containers_conformance::Rng::new(seed);
+    let payloads = (0..lists * per_list)
+        .map(|_| (rng.next() as u32) & 0x7FFF_FFFF)
+        .collect();
+    black_box(ListPlan {
+        lists,
+        per_list,
+        payloads,
+    })
+}
+
+fn bench_list_append_iter_opaque(c: &mut Criterion) {
+    let mut g = c.benchmark_group("list/append_iter_opaque");
+    let plan = list_plan(0x5EED_A11D, LISTS, PER_LIST);
+
+    g.bench_function("legacy", |b| {
+        b.iter(|| {
+            let mut a: prod::ListArena<PElem, PList, PNode, false> = prod::ListArena::new();
+            let mut lists = Vec::with_capacity(plan.lists);
+            for _ in 0..plan.lists {
+                lists.push(a.new_list());
+            }
+            for (k, &l) in lists.iter().enumerate() {
+                for j in 0..plan.per_list {
+                    a.append(l, PElem::new(plan.payloads[k * plan.per_list + j]));
+                }
+            }
+            let mut acc = 0u64;
+            for &l in &lists {
+                for e in a.iter(l) {
+                    acc = acc.wrapping_add(e.raw() as u64);
+                }
+            }
+            black_box(acc)
+        })
+    });
+
+    g.bench_function("verified", |b| {
+        b.iter(|| {
+            let mut a: verus::ListArena<VElem, VList, VNode, false> = verus::ListArena::new();
+            let mut lists = Vec::with_capacity(plan.lists);
+            for _ in 0..plan.lists {
+                lists.push(a.try_new_list().expect("within id space"));
+            }
+            for (k, &l) in lists.iter().enumerate() {
+                for j in 0..plan.per_list {
+                    a.try_append(l, VElem::new(plan.payloads[k * plan.per_list + j]))
+                        .expect("within id space");
+                }
+            }
+            let mut acc = 0u64;
+            for &l in &lists {
+                for e in a.iter(l) {
+                    acc = acc.wrapping_add(e.raw() as u64);
+                }
+            }
+            black_box(acc)
+        })
+    });
+
+    g.finish();
+}
+
+/// One splice plan: `lists` lists of `per_list` appends, then a merge order.
+struct SplicePlan {
+    lists: usize,
+    per_list: usize,
+    payloads: Vec<u32>,
+    order: Vec<u32>,
+}
+
+fn splice_plan(seed: u64, lists: usize, per_list: usize) -> SplicePlan {
+    let mut rng = containers_conformance::Rng::new(seed);
+    let payloads = (0..lists * per_list)
+        .map(|_| (rng.next() as u32) & 0x7FFF_FFFF)
+        .collect();
+    // The fixed row's source order; only the counts and payloads are opaque.
+    let order: Vec<u32> = (1..lists as u32).collect();
+    black_box(SplicePlan {
+        lists,
+        per_list,
+        payloads,
+        order,
+    })
+}
+
+fn bench_list_splice_opaque(c: &mut Criterion) {
+    let mut g = c.benchmark_group("list/splice_opaque");
+    let plan = splice_plan(0x5EED_5B1C, LISTS, 4);
+
+    g.bench_function("legacy", |b| {
+        b.iter(|| {
+            let mut a: prod::ListArena<PElem, PList, PNode, false> = prod::ListArena::new();
+            let mut lists = Vec::with_capacity(plan.lists);
+            for k in 0..plan.lists {
+                let l = a.new_list();
+                for j in 0..plan.per_list {
+                    a.append(l, PElem::new(plan.payloads[k * plan.per_list + j]));
+                }
+                lists.push(l);
+            }
+            let dst = lists[0];
+            for &src in &plan.order {
+                a.splice(dst, lists[src as usize]);
+            }
+            black_box(a.len(dst))
+        })
+    });
+
+    g.bench_function("verified", |b| {
+        b.iter(|| {
+            let mut a: verus::ListArena<VElem, VList, VNode, false> = verus::ListArena::new();
+            let mut lists = Vec::with_capacity(plan.lists);
+            for k in 0..plan.lists {
+                let l = a.try_new_list().expect("within id space");
+                for j in 0..plan.per_list {
+                    a.try_append(l, VElem::new(plan.payloads[k * plan.per_list + j]))
+                        .expect("within id space");
+                }
+                lists.push(l);
+            }
+            let dst = lists[0];
+            for &src in &plan.order {
+                a.splice(dst, lists[src as usize]);
+            }
+            black_box(a.len(dst))
+        })
+    });
+
+    g.finish();
+}
+
+/// One churn plan: `n` initial adds, then `steps` of `(slot, value)`.
+struct ChurnPlan {
+    n: usize,
+    steps: Vec<(u32, u64)>,
+}
+
+fn churn_plan(seed: u64, n: usize) -> ChurnPlan {
+    let mut rng = containers_conformance::Rng::new(seed);
+    let steps = (0..n / 2)
+        .map(|_| (rng.below(n as u64) as u32, rng.next()))
+        .collect();
+    black_box(ChurnPlan { n, steps })
+}
+
+fn bench_sparse_set_churn_opaque(c: &mut Criterion) {
+    let mut g = c.benchmark_group("sparse_set/churn_opaque");
+    let plan = churn_plan(0x5EED_C4A1, 20_000);
+
+    g.bench_function("legacy", |b| {
+        b.iter(|| {
+            let mut s: prod::SparseSet<u64, PElem, prod::ParallelStore<u64, PElem>, true> =
+                prod::SparseSet::new();
+            let mut ids = Vec::with_capacity(plan.n);
+            for i in 0..plan.n {
+                ids.push(s.add(i as u64));
+            }
+            let tok = s.mark(prod::ShrinkPolicy::Never);
+            for &(k, x) in &plan.steps {
+                let id = ids[k as usize];
+                if s.contains(id) {
+                    s.remove(id);
+                } else {
+                    ids[k as usize] = s.add(x);
+                }
+            }
             s.restore(tok);
+            black_box(s.len().raw())
+        })
+    });
+
+    g.bench_function("verified", |b| {
+        b.iter(|| {
+            let mut s: ForkHistory<
+                verus::SparseSet<u64, VElem, verus::ParallelStore<u64, VElem>, true>,
+            > = ForkHistory::new(verus::SparseSet::new());
+            let mut ids = Vec::with_capacity(plan.n);
+            for i in 0..plan.n {
+                ids.push(s.try_add(i as u64).expect("add: within id space"));
+            }
+            let tok = s
+                .mark(verus::ShrinkPolicy::Never)
+                .expect("mark: depth bounded by this harness");
+            for &(k, x) in &plan.steps {
+                let id = ids[k as usize];
+                if s.contains(id) {
+                    s.remove(id);
+                } else {
+                    ids[k as usize] = s.try_add(x).expect("add: within id space");
+                }
+            }
+            assert!(s.restore_and_pop(tok), "restore: own token");
             black_box(s.len().raw())
         })
     });
@@ -701,6 +946,13 @@ fn bench_sparse_set_churn(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 // aov/log: AppendOnlyVec as the append log it is (node store pattern) —
 // bulk push, slice scan, mark/restore.
+//
+// Read this row with its phase rows below. The composite is alignment-bound:
+// on unchanged source its verified/legacy speedup moved between 0.92× and
+// 1.02× with `-C llvm-args=-align-loops` / `-align-all-blocks` alone
+// (2026-09-20), the two push loops are the same instructions, and every phase
+// on its own is at parity or better. `aov/push`, `aov/push_presized`,
+// `aov/scan` and `aov/mark_restore` are the rows that measure the container.
 // ---------------------------------------------------------------------------
 
 fn bench_aov_log(c: &mut Criterion) {
@@ -728,12 +980,13 @@ fn bench_aov_log(c: &mut Criterion) {
 
     g.bench_function("verified", |b| {
         b.iter(|| {
-            let mut v: verus::AppendOnlyVec<u64, usize, true> = verus::AppendOnlyVec::new();
+            let mut v: ForkHistory<verus::AppendOnlyVec<u64, usize, true>> =
+                ForkHistory::new(verus::AppendOnlyVec::new());
             for i in 0..N / 2 {
                 v.try_push(i as u64).expect("push: within index word");
             }
             let tok = v
-                .try_mark(verus::ShrinkPolicy::Never)
+                .mark(verus::ShrinkPolicy::Never)
                 .expect("mark: depth bounded by this harness");
             for i in 0..N / 2 {
                 v.try_push(i as u64).expect("push: within index word");
@@ -742,11 +995,145 @@ fn bench_aov_log(c: &mut Criterion) {
             for x in v.as_slice() {
                 acc = acc.wrapping_add(*x);
             }
-            v.try_restore(tok).expect("restore: own token");
+            assert!(v.restore_and_pop(tok), "restore: own token");
             black_box((acc, v.len()))
         })
     });
 
+    g.finish();
+}
+
+fn aov_filled_legacy(n: usize) -> prod::AppendOnlyVec<u64, usize, true> {
+    let mut v = prod::AppendOnlyVec::new();
+    for i in 0..n {
+        v.push(i as u64);
+    }
+    v
+}
+
+fn aov_filled_verified(n: usize) -> ForkHistory<verus::AppendOnlyVec<u64, usize, true>> {
+    let mut v = ForkHistory::new(verus::AppendOnlyVec::new());
+    for i in 0..n {
+        v.try_push(i as u64).expect("push: within index word");
+    }
+    v
+}
+
+/// `aov/log` taken apart: the pushes from empty (growth included), the pushes
+/// into a presized vec, the slice scan, and mark/push/restore, each on both
+/// sides. These are the container's own costs; the composite above adds the
+/// allocator's and the compiler's placement.
+fn bench_aov_phases(c: &mut Criterion) {
+    const N: usize = 100_000;
+
+    let mut g = c.benchmark_group("aov/push");
+    g.bench_function("legacy", |b| {
+        b.iter(|| {
+            let mut v: prod::AppendOnlyVec<u64, usize, true> = prod::AppendOnlyVec::new();
+            for i in 0..N {
+                v.push(i as u64);
+            }
+            black_box(v.len())
+        })
+    });
+    g.bench_function("verified", |b| {
+        b.iter(|| {
+            let mut v: ForkHistory<verus::AppendOnlyVec<u64, usize, true>> =
+                ForkHistory::new(verus::AppendOnlyVec::new());
+            for i in 0..N {
+                v.try_push(i as u64).expect("push: within index word");
+            }
+            black_box(v.len())
+        })
+    });
+    g.finish();
+
+    let mut g = c.benchmark_group("aov/push_presized");
+    g.bench_function("legacy", |b| {
+        b.iter_batched_ref(
+            || {
+                let mut v = aov_filled_legacy(N);
+                let tok = v.mark(prod::ShrinkPolicy::Never);
+                v.restore(tok);
+                v
+            },
+            |v| {
+                for i in 0..N {
+                    v.push(i as u64);
+                }
+                black_box(v.len())
+            },
+            BatchSize::LargeInput,
+        )
+    });
+    g.bench_function("verified", |b| {
+        b.iter_batched_ref(
+            || aov_filled_verified(N),
+            |v| {
+                for i in 0..N {
+                    v.try_push(i as u64).expect("push: within index word");
+                }
+                black_box(v.len())
+            },
+            BatchSize::LargeInput,
+        )
+    });
+    g.finish();
+
+    let mut g = c.benchmark_group("aov/scan");
+    let l = aov_filled_legacy(N);
+    let v = aov_filled_verified(N);
+    g.bench_function("legacy", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for x in l.as_slice() {
+                acc = acc.wrapping_add(*x);
+            }
+            black_box(acc)
+        })
+    });
+    g.bench_function("verified", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for x in v.as_slice() {
+                acc = acc.wrapping_add(*x);
+            }
+            black_box(acc)
+        })
+    });
+    g.finish();
+
+    let mut g = c.benchmark_group("aov/mark_restore");
+    g.bench_function("legacy", |b| {
+        b.iter_batched_ref(
+            || aov_filled_legacy(N / 2),
+            |v| {
+                let tok = v.mark(prod::ShrinkPolicy::Never);
+                for i in 0..N / 2 {
+                    v.push(i as u64);
+                }
+                v.restore(tok);
+                black_box(v.len())
+            },
+            BatchSize::LargeInput,
+        )
+    });
+    g.bench_function("verified", |b| {
+        b.iter_batched_ref(
+            || aov_filled_verified(N / 2),
+            |v| {
+                let tok = v
+                    .mark(verus::ShrinkPolicy::Never)
+                    .expect("mark: depth bounded by this harness");
+                for i in 0..N / 2 {
+                    v.try_push(i as u64).expect("push: within index word");
+                }
+                assert!(v.restore_and_pop(tok), "restore: own token");
+                black_box(v.len())
+            },
+            BatchSize::LargeInput,
+        )
+    });
     g.finish();
 }
 
@@ -800,6 +1187,71 @@ fn bench_map_intern_string(c: &mut Criterion) {
             for k in &ks {
                 if m.id_of(k).is_some() {
                     hits += 1;
+                }
+            }
+            black_box(hits)
+        })
+    });
+
+    g.finish();
+}
+
+/// Interning with an expensive key: 256-byte strings, so a clone on a hit is
+/// a real allocation and copy (chapter 20 second pass, SpMap `intern_entry`).
+fn bench_map_intern_expensive_key(c: &mut Criterion) {
+    let mut g = c.benchmark_group("map/intern_expensive_key");
+    const N: usize = 5_000;
+
+    fn keys() -> Vec<String> {
+        (0..N)
+            .map(|i| {
+                let mut k = format!("op::namespace_{}::symbol_{:08}::", i % 37, i);
+                while k.len() < 256 {
+                    k.push_str("padding-to-make-the-key-expensive-");
+                }
+                k.truncate(256);
+                k
+            })
+            .collect()
+    }
+
+    g.bench_function("legacy", |b| {
+        let ks = keys();
+        b.iter(|| {
+            let mut m: prod::Map<String, u32, usize, true> = prod::Map::new();
+            for (i, k) in ks.iter().enumerate() {
+                if m.id_of(k).is_none() {
+                    m.insert(k.clone(), i as u32);
+                }
+            }
+            let mut hits = 0usize;
+            for _ in 0..4 {
+                for k in &ks {
+                    if m.id_of(k).is_some() {
+                        hits += 1;
+                    }
+                }
+            }
+            black_box(hits)
+        })
+    });
+
+    g.bench_function("verified", |b| {
+        let ks = keys();
+        b.iter(|| {
+            let mut m: verus::SpMap<String, u32, usize, true> = verus::SpMap::new();
+            for (i, k) in ks.iter().enumerate() {
+                if m.id_of(k).is_none() {
+                    m.try_insert(k.clone(), i as u32)
+                        .expect("insert: within index word");
+                }
+            }
+            let mut hits = 0usize;
+            for _ in 0..4 {
+                for k in &ks {
+                    if m.id_of(k).is_some() {
+                        hits += 1;
+                    }
                 }
             }
             black_box(hits)
@@ -865,8 +1317,242 @@ fn bench_map_intern_composite(c: &mut Criterion) {
 
     g.finish();
 }
+
+// ---------------------------------------------------------------------------
+// map/restore_small_suffix: the SMT-style map cycle — a large live map, then
+// per frame a handful of inserts and a restore. Legacy rebuilds the whole
+// index (one key clone per survivor) on every restore; the verified map
+// unwinds only the discarded suffix. Measured with u64 keys (LitValStore
+// pattern) and String keys (registry pattern, where the clone is a heap
+// allocation). The map is built once per bench; each iteration returns it
+// to the marked state, so the setup is outside the timed region.
+// ---------------------------------------------------------------------------
+
+fn bench_map_restore_small_suffix(c: &mut Criterion) {
+    const LIVE: usize = 100_000;
+    const PER_FRAME: u64 = 64;
+
+    let mut g = c.benchmark_group("map/restore_small_suffix");
+    g.bench_function("legacy", |b| {
+        let mut m: prod::Map<u64, (), usize, true> = prod::Map::new();
+        for k in 0..LIVE as u64 {
+            m.insert(k, ());
+        }
+        b.iter(|| {
+            let tok = m.mark(prod::ShrinkPolicy::Never);
+            for k in 0..PER_FRAME {
+                m.insert(LIVE as u64 + k, ());
+            }
+            m.restore(tok);
+            black_box(m.len())
+        })
+    });
+    g.bench_function("verified", |b| {
+        let mut m: ForkHistory<verus::SpMap<u64, (), usize, true>> =
+            ForkHistory::new(verus::SpMap::new());
+        for k in 0..LIVE as u64 {
+            m.try_insert(k, ()).expect("insert: within index word");
+        }
+        b.iter(|| {
+            let tok = m
+                .mark(verus::ShrinkPolicy::Never)
+                .expect("mark: depth bounded by this harness");
+            for k in 0..PER_FRAME {
+                m.try_insert(LIVE as u64 + k, ())
+                    .expect("insert: within index word");
+            }
+            assert!(m.restore_and_pop(tok), "restore: own token");
+            black_box(m.len())
+        })
+    });
+    g.finish();
+
+    let mut g = c.benchmark_group("map/restore_small_suffix_string");
+    const LIVE_STRING: usize = 20_000;
+    fn key(i: u64) -> String {
+        format!("op::namespace_{}::symbol_{:08}", i % 37, i)
+    }
+    g.bench_function("legacy", |b| {
+        let mut m: prod::Map<String, u32, usize, true> = prod::Map::new();
+        for i in 0..LIVE_STRING as u64 {
+            m.insert(key(i), i as u32);
+        }
+        let fresh: Vec<String> = (0..PER_FRAME)
+            .map(|k| key(LIVE_STRING as u64 + k))
+            .collect();
+        b.iter(|| {
+            let tok = m.mark(prod::ShrinkPolicy::Never);
+            for (k, s) in fresh.iter().enumerate() {
+                m.insert(s.clone(), k as u32);
+            }
+            m.restore(tok);
+            black_box(m.len())
+        })
+    });
+    g.bench_function("verified", |b| {
+        let mut m: ForkHistory<verus::SpMap<String, u32, usize, true>> =
+            ForkHistory::new(verus::SpMap::new());
+        for i in 0..LIVE_STRING as u64 {
+            m.try_insert(key(i), i as u32)
+                .expect("insert: within index word");
+        }
+        let fresh: Vec<String> = (0..PER_FRAME)
+            .map(|k| key(LIVE_STRING as u64 + k))
+            .collect();
+        b.iter(|| {
+            let tok = m
+                .mark(verus::ShrinkPolicy::Never)
+                .expect("mark: depth bounded by this harness");
+            for (k, s) in fresh.iter().enumerate() {
+                m.try_insert(s.clone(), k as u32)
+                    .expect("insert: within index word");
+            }
+            assert!(m.restore_and_pop(tok), "restore: own token");
+            black_box(m.len())
+        })
+    });
+    g.finish();
+}
+// hinted_arena/probe: the fingerprint index in the shape the e-graph's
+// node-content cache takes. Coarse fingerprints (`a = i % 256`) give buckets
+// of sixteen candidates; every live content is probed (a hit at every bucket
+// depth) and one absent content per fingerprint (a full scan to a miss).
+// Counts and the fingerprint modulus pass through `black_box` once so the
+// bucket depth is not a compile-time constant.
+fn bench_hinted_arena_probe(c: &mut Criterion) {
+    use verus::Pair;
+    use verus::hinted_arena::HintedArena;
+    let mut g = c.benchmark_group("hinted_arena/probe");
+    // 2048 cells keep the whole working set (cells, keys, buckets, table)
+    // well inside L1 on every core class; at 4096 the inline store's 12-byte
+    // cells put it at the edge and the rows became placement-dominated.
+    let n = black_box(2048u32);
+    let fps = black_box(128u32);
+    fn arm<S: verus::diff_store::DiffStore<Pair<u32, u32>, u32, true>>(
+        g: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+        label: &str,
+        mut arena: HintedArena<Pair<u32, u32>, u32, S, true>,
+        n: u32,
+        fps: u32,
+    ) {
+        let mut live = Vec::new();
+        for i in 0..n {
+            let p = Pair { a: i % fps, b: i };
+            arena.push(p).expect("capacity");
+            live.push(p);
+        }
+        let absent: Vec<Pair<u32, u32>> = (0..fps)
+            .map(|a| Pair {
+                a,
+                b: 0xDEAD_0000 + a,
+            })
+            .collect();
+        g.bench_function(label, |b| {
+            b.iter(|| {
+                let mut hits = 0usize;
+                for p in &live {
+                    if arena.probe(p).is_some() {
+                        hits += 1;
+                    }
+                }
+                for p in &absent {
+                    if arena.probe(p).is_some() {
+                        hits += 1;
+                    }
+                }
+                black_box(hits)
+            })
+        });
+        g.bench_function(format!("{label}_hits_only"), |b| {
+            b.iter(|| {
+                let mut hits = 0usize;
+                for p in &live {
+                    if arena.probe(p).is_some() {
+                        hits += 1;
+                    }
+                }
+                black_box(hits)
+            })
+        });
+        g.bench_function(format!("{label}_misses_only"), |b| {
+            b.iter(|| {
+                let mut hits = 0usize;
+                for _ in 0..16 {
+                    for p in &absent {
+                        if arena.probe(p).is_some() {
+                            hits += 1;
+                        }
+                    }
+                }
+                black_box(hits)
+            })
+        });
+    }
+    arm(
+        &mut g,
+        "inline",
+        HintedArena::<
+            Pair<u32, u32>,
+            u32,
+            verus::inline_store::InlineStore<Pair<u32, u32>, u32>,
+            true,
+        >::new(),
+        n,
+        fps,
+    );
+    arm(
+        &mut g,
+        "parallel",
+        HintedArena::<
+            Pair<u32, u32>,
+            u32,
+            verus::parallel_store::ParallelStore<Pair<u32, u32>, u32>,
+            true,
+        >::new(),
+        n,
+        fps,
+    );
+    g.finish();
+}
+
+// layered_span_map/flatten: the base-plus-delta span map regrouped into one
+// dense map, at three densities of the invalidated-key list (what the per-key
+// invalidation test scales with). Key count through `black_box` once.
+fn bench_layered_span_map_flatten(c: &mut Criterion) {
+    use verus::LayeredSpanMap;
+    use verus::dense_span_map::DenseSpanMap;
+    let mut g = c.benchmark_group("layered_span_map/flatten");
+    let num_keys = black_box(16_384usize);
+    let base_stream: Vec<(usize, u32)> = (0..num_keys)
+        .flat_map(|k| (0..4u32).map(move |j| (k, (k as u32) * 4 + j)))
+        .collect();
+    let delta_stream: Vec<(usize, u32)> = (0..num_keys)
+        .filter(|k| k % 4 == 0)
+        .map(|k| (k, 0xD000_0000 + k as u32))
+        .collect();
+    for (label, stride) in [
+        ("no_invalid", 0usize),
+        ("sparse_invalid", 64),
+        ("dense_invalid", 2),
+    ] {
+        let invalid: Vec<usize> = if stride == 0 {
+            Vec::new()
+        } else {
+            (0..num_keys).filter(|k| k % stride == 0).collect()
+        };
+        let base =
+            DenseSpanMap::<u32>::try_build(&base_stream, num_keys).expect("base keys in range");
+        let layered = LayeredSpanMap::<u32>::try_with_delta(base, &delta_stream, &invalid)
+            .expect("delta keys in range, invalid list ascending");
+        g.bench_function(label, |b| b.iter(|| black_box(layered.flatten().len())));
+    }
+    g.finish();
+}
+
 criterion_group!(
     benches,
+    bench_layered_span_map_flatten,
+    bench_hinted_arena_probe,
     bench_vec_try_extend,
     bench_vec_mark_set_restore,
     bench_vec_restore_replay,
@@ -878,8 +1564,14 @@ criterion_group!(
     bench_class_ring_merge_restore,
     bench_map_intern,
     bench_map_intern_string,
+    bench_map_intern_expensive_key,
     bench_map_intern_composite,
+    bench_map_restore_small_suffix,
     bench_sparse_set_churn,
+    bench_list_append_iter_opaque,
+    bench_list_splice_opaque,
+    bench_sparse_set_churn_opaque,
     bench_aov_log,
+    bench_aov_phases,
 );
 criterion_main!(benches);
