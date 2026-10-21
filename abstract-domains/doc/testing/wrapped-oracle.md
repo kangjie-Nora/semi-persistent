@@ -48,7 +48,7 @@ implementation uses checked native arithmetic and never overflows a host integer
 Signed and unsigned operations are proved to agree on the resulting bit patterns.
 All enabled arithmetic transfers prove universal containment against gamma.
 
-Seven arithmetic tests exercise actual transfers: negation over every u8 arc,
+Eight arithmetic tests exercise actual transfers: negation over every u8 arc,
 all u8 singleton pairs, 4,225 sampled abstract pairs with all concrete operand
 pairs, and boundaries at all five widths. Expected sets use Rust wrapping
 operations over independently enumerated input sets. They check exact sets,
@@ -64,14 +64,14 @@ reported through the flag.
 Unsigned division and remainder split only at the zero pole, yielding at most
 two pieces per operand. Signed operations use the signed half-circle split and
 then convert pieces to magnitude intervals; quotient uses operand-sign XOR and
-remainder uses the dividend sign. Non-wrapping signed inputs take a constant-time
-fast path; other signed inputs use the verified piece decomposition. MIN/-1
+remainder uses the dividend sign. Nonnegative, non-wrapping signed arcs take a
+constant-time fast path; other signed inputs use the verified piece decomposition. MIN/-1
 follows the shared wrapping semantics. The final result is a deterministic join
 of all nonempty piece-pair results.
 
 The reuse of Interval remainder bounds and the final single-arc cover can add
 spurious values. Remainder is not claimed exact even for every singleton pair.
-Six tests check all u8 singleton operand pairs, 4,225 sampled abstract pairs
+Seven tests check all u8 singleton operand pairs, 4,225 sampled abstract pairs
 with exhaustive concrete operands, exact zero flags, and boundaries at all five
 widths. Expected signed values use Rust wrapping_div/wrapping_rem; division by
 zero is checked separately. These tests check containment for general results.

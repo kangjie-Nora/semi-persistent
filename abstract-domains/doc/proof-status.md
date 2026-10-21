@@ -21,7 +21,6 @@ Enabled executable widths:
 - `d16` (`u16`)
 - `d32` (`u32`)
 - `d64` (`u64`)
-
 The `d128` macro invocation remains disabled because its bitvector obligations
 exceed the current solver capacity. Only the generic `Interval<W>` and
 `Wrapped<W>` domains cover `u128`; do not describe `ExecTnum`, `ExecAnum`, or

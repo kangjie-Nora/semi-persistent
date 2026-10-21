@@ -572,12 +572,6 @@ impl<W: Word> Arith<Signed<W>> for Wrapped<W> {
 }
 
 impl<W:Word> Wrapped<W> {
-    /// Public specification of the exact `Never` portion of a division flag.
-    /// Signed and unsigned machine semantics use the same all-zero bit pattern.
-    pub open spec fn zero_flag_exact(d: &Self, flag: DivZero) -> bool {
-        (flag is Never) == !d.gamma(W::from_int(0))
-    }
-
     // Unsigned division only needs the north-pole (zero) split.  Keeping this
     // separate from the signed four-piece decomposition avoids unnecessary
     // half-circle cuts and reduces the unsigned cross product from 16 pieces
