@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 //! Signs of mathematical integers. Bottom is provided by the shared BotOr wrapper.
-#![allow(unused_imports, unused_variables)]
 use crate::facts_z::FactsZ;
 use crate::ibig::IBig;
 use crate::interval_z::{Hi, IntervalZ, Lo};
@@ -9,8 +8,11 @@ use crate::lattice::*;
 use crate::reduce::Refine;
 use crate::semantics::*;
 use crate::transfer::*;
+#[allow(unused_imports)]
 use crate::word::*;
+#[allow(unused_imports)]
 use vstd::arithmetic::div_mod::*;
+#[allow(unused_imports)]
 use vstd::arithmetic::mul::*;
 use vstd::prelude::*;
 
@@ -217,7 +219,7 @@ impl Sign {
         } }
         r
     }
-    /// The tight interval hull of this sign; NonZero cannot express its hole in FactsZ yet.
+    /// The interval hull of this sign; NonZero cannot express its hole in FactsZ yet.
     fn interval_hull(&self)->(r:IntervalZ)
         ensures r.wf(), forall|x:int| self.gamma(x) ==> #[trigger] r.gamma(x),
     {
