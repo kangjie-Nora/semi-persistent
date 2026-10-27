@@ -23,9 +23,9 @@ pub enum SignKind {
     Neg,
     Zero,
     Pos,
-    NonPos,
-    NonNeg,
+    NegOrZero,
     NonZero,
+    PosOrZero,
     Top,
 }
 
@@ -58,9 +58,9 @@ impl SignKind {
             Self::Neg => x < 0,
             Self::Zero => x == 0,
             Self::Pos => x > 0,
-            Self::NonPos => x <= 0,
-            Self::NonNeg => x >= 0,
+            Self::NegOrZero => x <= 0,
             Self::NonZero => x != 0,
+            Self::PosOrZero => x >= 0,
             Self::Top => true,
         }
     }
@@ -75,9 +75,9 @@ impl SignKind {
             Self::Neg => (true, false, false),
             Self::Zero => (false, true, false),
             Self::Pos => (false, false, true),
-            Self::NonPos => (true, true, false),
-            Self::NonNeg => (false, true, true),
+            Self::NegOrZero => (true, true, false),
             Self::NonZero => (true, false, true),
+            Self::PosOrZero => (false, true, true),
             Self::Top => (true, true, true),
         }
     }
@@ -89,7 +89,7 @@ pub closed spec fn from_categories(n: bool, z: bool, p: bool) -> BotOr<Sign> {
             if p {
                 SignKind::Top
             } else {
-                SignKind::NonPos
+                SignKind::NegOrZero
             }
         } else {
             if p {
@@ -101,7 +101,7 @@ pub closed spec fn from_categories(n: bool, z: bool, p: bool) -> BotOr<Sign> {
     } else {
         if z {
             if p {
-                SignKind::NonNeg
+                SignKind::PosOrZero
             } else {
                 SignKind::Zero
             }
@@ -175,7 +175,7 @@ impl Sign {
                         if p {
                             SignKind::Top
                         } else {
-                            SignKind::NonPos
+                            SignKind::NegOrZero
                         }
                     } else {
                         if p {
@@ -190,7 +190,7 @@ impl Sign {
             BotOr::Val(
                 Self::from_kind(
                     if p {
-                        SignKind::NonNeg
+                        SignKind::PosOrZero
                     } else {
                         SignKind::Zero
                     },
@@ -212,9 +212,9 @@ impl Sign {
             SignKind::Neg => x < 0,
             SignKind::Zero => x == 0,
             SignKind::Pos => x > 0,
-            SignKind::NonPos => x <= 0,
-            SignKind::NonNeg => x >= 0,
+            SignKind::NegOrZero => x <= 0,
             SignKind::NonZero => x != 0,
+            SignKind::PosOrZero => x >= 0,
             SignKind::Top => true,
         }
     }
@@ -435,8 +435,8 @@ impl Sign {
             SignKind::Neg => (Lo::NegInf, Hi::Fin(IBig::from_i64(-1))),
             SignKind::Pos => (Lo::Fin(IBig::from_i64(1)), Hi::PosInf),
             SignKind::Zero => (Lo::Fin(IBig::from_i64(0)), Hi::Fin(IBig::from_i64(0))),
-            SignKind::NonNeg => (Lo::Fin(IBig::from_i64(0)), Hi::PosInf),
-            SignKind::NonPos => (Lo::NegInf, Hi::Fin(IBig::from_i64(0))),
+            SignKind::PosOrZero => (Lo::Fin(IBig::from_i64(0)), Hi::PosInf),
+            SignKind::NegOrZero => (Lo::NegInf, Hi::Fin(IBig::from_i64(0))),
             _ => (Lo::NegInf, Hi::PosInf),
         };
         match IntervalZ::new(lo, hi) {
@@ -508,7 +508,7 @@ impl Sign {
         match d.kind {
             SignKind::Neg | SignKind::Pos | SignKind::NonZero => DivZero::Never,
             SignKind::Zero => DivZero::Always,
-            SignKind::NonPos | SignKind::NonNeg | SignKind::Top => DivZero::Maybe,
+            SignKind::NegOrZero | SignKind::PosOrZero | SignKind::Top => DivZero::Maybe,
         }
     }
 
@@ -696,7 +696,7 @@ impl Sign {
 
 impl DivRem<Euclid> for Sign {
     fn contains_zero(&self) -> (b: bool) {
-        matches!(self.kind, SignKind::Zero | SignKind::NonPos | SignKind::NonNeg | SignKind::Top)
+        matches!(self.kind, SignKind::Zero | SignKind::NegOrZero | SignKind::PosOrZero | SignKind::Top)
     }
 
     fn div(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
@@ -747,7 +747,7 @@ impl DivRem<Euclid> for Sign {
                     (BotOr::Val(q), Self::div_flag(d))
                 },
                 _ => {
-                    let q = Self::from_kind(SignKind::NonNeg);
+                    let q = Self::from_kind(SignKind::PosOrZero);
                     proof {
                         assert forall|x: int, y: int|
                             self.gamma(x) && d.gamma(y) && y != 0 implies #[trigger] q.gamma(
@@ -765,7 +765,7 @@ impl DivRem<Euclid> for Sign {
 
 impl DivRem<Trunc> for Sign {
     fn contains_zero(&self) -> (b: bool) {
-        matches!(self.kind, SignKind::Zero | SignKind::NonPos | SignKind::NonNeg | SignKind::Top)
+        matches!(self.kind, SignKind::Zero | SignKind::NegOrZero | SignKind::PosOrZero | SignKind::Top)
     }
 
     fn div(&self, d: &Self) -> (r: (BotOr<Self>, DivZero)) {
