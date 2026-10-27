@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; AC multiplicity: variable binding consumes all
 
@@ -15,5 +17,5 @@
 (run 1)
 
 ;; Both should fire
-(check (= t (Got (A) (Add (B) (B)))))
-(check (= t (Got (B) (Add (A) (A) (A)))))
+(prove (= t (Got (A) (Add (B) (B)))))
+(prove (= t (Got (B) (Add (A) (A) (A)))))

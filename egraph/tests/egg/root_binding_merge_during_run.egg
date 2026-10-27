@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; The join on a shared root has to survive delta restriction. Nothing unions the two
@@ -14,9 +16,9 @@
 (rule ((= d (F x)) (= d (G y))) ((union (Ok x y) (N 9))))
 
 (run 10)
-(check (= (Ok (N 1) (N 2)) (N 9)))
+(prove (= (Ok (N 1) (N 2)) (N 9)))
 ;; The soundness counterpart: no merge reaches this pair, so the join finds nothing.
 (F (N 3))
 (G (N 4))
 (run 10)
-(check (!= (Ok (N 3) (N 4)) (N 9)))
+(prove (!= (Ok (N 3) (N 4)) (N 9)))

@@ -29,7 +29,7 @@ joined `(Var "x")` to `(Num 5)` while all seven of the source's checks
 already pass; at `(run 6)` all three answers hold. egglog's output is
 identical at 5 and at 6, so both engines run one program.
 
-**The three answers are asserted, not only printed.** `(check (= (Var "x")
+**The three answers are asserted, not only printed.** `(prove (= (Var "x")
 (Num 5)))` and its two siblings are added to every configuration. The source
 only extracts them, and an extraction is not a check; asserting them makes
 the engines' agreement on the answers part of the validation.
@@ -80,7 +80,7 @@ completion pass. Measured, all three completion modes on this program:
 - **lazy** (`--lazy-ac-eqs`): **all ten checks pass in one 484 s run**,
   ending at the restored 69-node graph. The lazy transaction is shared
   across consecutive checks and every completion pass is goal-directed
-  (`ac-congruence-completeness.md` section 13).
+  (`06-ac-congruence-closure.md` section 13).
 
 484 s against the rules encoding's 118-128 ms is a validation result, not a
 competitive configuration, so the native encoding appears in no campaign

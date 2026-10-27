@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; A rule's right-hand side is a syntax tree too, so a nested same-op application written in
@@ -33,7 +35,7 @@
 (run 5)
 
 ;; Both right-hand sides denote the same sequence, so both roots land in one class.
-(check (= s f))
-(check (= s (F (a) (b) (c))))
+(prove (= s f))
+(prove (= s (F (a) (b) (c))))
 ;; Order is still not touched: flattening re-associates, it does not reorder.
-(check (!= s (F (c) (b) (a))))
+(prove (!= s (F (c) (b) (a))))

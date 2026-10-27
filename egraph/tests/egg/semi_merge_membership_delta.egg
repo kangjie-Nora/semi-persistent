@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; TYPES: machine
 ;; Merge-membership regression: (Sub (Num 1) (Num 1)) merges
 ;; into the PRE-EXISTING (Num 0) class (nothing is minted, and in one union
@@ -15,4 +17,4 @@
 (rewrite (Add (Num 0) ..rest) (Add ..rest))
 (let t (Add (x) (Sub (Num 1) (Num 1))))
 (run 4)
-(check (= t (x)))
+(prove (= t (x)))

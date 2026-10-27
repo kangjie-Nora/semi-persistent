@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 ;; Guard for design §5b against the flattening repair that was tried and rejected: the
@@ -20,4 +22,4 @@
 (let c (Add (A) (B)))
 (let n (Neg c))
 (let t (Add c n))
-(check (= t (Zero)))
+(prove (= t (Zero)))

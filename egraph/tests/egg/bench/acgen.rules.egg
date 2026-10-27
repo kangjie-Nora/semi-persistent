@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; TYPES: machine
 ;; Translation of the generated AC benchmark (egglog-bridge/examples/make-ac-bench.py
 ;; at N=11, set actions ported to union for the tests dialect). Commutativity and
@@ -41,6 +43,6 @@
 (let _r8 (Add _r7 _lit7))
 (let _r9 (Add _r8 _lit8))
 (run 10000)
-(check (= _r9 _v9))
+(prove (= _r9 _v9))
 (print-size)
 (print-stats :file "acgen.rules.stats.json")

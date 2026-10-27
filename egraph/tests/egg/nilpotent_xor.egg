@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: on
 ;; CHECK_AC_BASIS: on
@@ -21,9 +23,9 @@
 (let x_aab (xor (a) (a) (b)))
 
 (run 5)
-(check (= x_aa (e)))
-(check (= x_aaa (a)))
-(check (= x_aaaa (e)))
-(check (= x_aab (b)))
+(prove (= x_aa (e)))
+(prove (= x_aaa (a)))
+(prove (= x_aaaa (e)))
+(prove (= x_aab (b)))
 ;; and the two even cases coincide
-(check (= x_aa x_aaaa))
+(prove (= x_aa x_aaaa))

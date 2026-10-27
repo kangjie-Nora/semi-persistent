@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: on
 ;; CHECK_AC_BASIS: on
@@ -34,8 +36,8 @@
 (run 8)
 
 ;; Each op derives its own critical-pair equality.
-(check (= s_cd s_ae))
-(check (= m_pd m_aq))
+(prove (= s_cd s_ae))
+(prove (= m_pd m_aq))
 
 ;; No cross-op contamination: the Add sum and the Mul product of the same pair differ.
-(check (!= s_ab m_ab))
+(prove (!= s_ab m_ab))

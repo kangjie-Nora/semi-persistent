@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: sort-error
 ;; Book chapter 4: a clamp is not a free-standing property.
 ;;
@@ -20,4 +22,4 @@
 ;; No structural attribute, so `dup` is an ordinary binary Plain node.
 (function dup (E E) E :idempotent)
 
-(check (= (dup a a) a))
+(prove (= (dup a a) a))

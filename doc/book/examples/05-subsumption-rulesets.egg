@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; Book chapter 5: subsumption and ruleset selection.
 
@@ -18,10 +20,10 @@
 (let value (old item))
 
 (run simplify 2)
-(check (= value (reduced item)))
-(check (!= value (final item)))
+(prove (= value (reduced item)))
+(prove (!= value (final item)))
 
 (run 2)
-(check (= value (final item)))
-(check (!= value (stale item)))
+(prove (= value (final item)))
+(prove (!= value (stale item)))
 ;; ANCHOR_END: subsumption-rulesets

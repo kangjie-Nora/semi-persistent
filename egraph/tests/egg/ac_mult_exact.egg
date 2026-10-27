@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; AC multiplicity: exact semantics
 ;; x:1 means multiplicity must be exactly 1
@@ -17,7 +19,7 @@
 (run 10)
 
 ;; Marker should exist (B matched, mult 1 == 1)
-(check (= t (Marker)))
+(prove (= t (Marker)))
 
 ;; Now test that (A):1 does NOT match A:2
 ;; We use a separate marker to verify the A-rule does NOT fire
@@ -26,4 +28,4 @@
 (run 10)
 
 ;; MarkerA should NOT be equal to t, because A has mult 2, not 1
-(check (!= t (MarkerA)))
+(prove (!= t (MarkerA)))

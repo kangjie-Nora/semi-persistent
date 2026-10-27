@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: error
 ;; Book chapter 8: a class containing only unextractable nodes cannot be extracted.
 
@@ -5,6 +7,6 @@
 (sort E)
 (constructor hidden () E :unextractable)
 (let value (hidden))
-(check value)
+(prove value)
 (extract value)
 ;; ANCHOR_END: extraction-failure

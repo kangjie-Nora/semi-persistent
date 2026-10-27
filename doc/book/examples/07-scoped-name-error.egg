@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: sort-error
 ;; EVAL: both
 ;; Book chapter 7: a let binding does not survive its scope.
@@ -8,5 +10,5 @@
 (push)
 (let scoped (a))
 (pop)
-(check (= scoped (a)))
+(prove (= scoped (a)))
 ;; ANCHOR_END: scoped-name-error

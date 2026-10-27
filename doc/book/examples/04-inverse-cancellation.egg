@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; EVAL: both
 ;; Inverse-pair cancellation is part of term construction.
@@ -12,5 +14,5 @@
   :identity (Zero)
   :inverse Neg)
 
-(check (= (Add A A (Neg A)) A))
+(prove (= (Add A A (Neg A)) A))
 ;; ANCHOR_END: inverse-cancellation

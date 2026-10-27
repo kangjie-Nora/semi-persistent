@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; Book chapter 5: directional rewrites and bidirectional rewrites.
 
@@ -18,8 +20,8 @@
 (let reverse (h c))
 (run 3)
 
-(check (= forward (g a)))
-(check (= forward (h a)))
-(check (!= rhs_only (f b)))
-(check (= reverse (f c)))
+(prove (= forward (g a)))
+(prove (= forward (h a)))
+(prove (!= rhs_only (f b)))
+(prove (= reverse (f c)))
 ;; ANCHOR_END: rewrite-directions

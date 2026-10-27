@@ -1,6 +1,8 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: check-failed
 ;; TYPES: bignum
 (datatype Math (Num IBig))
 (let a (Num 1))
 (let b (Num 2))
-(check (= a b))
+(prove (= a b))

@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: check-failed
 ;; TYPES: machine
 ;; Partition semantics: two AC pattern elements bind distinct multiset children,
@@ -13,4 +15,4 @@
 
 (let sq (Add (Const 4) (Const 4)))
 (run 3)
-(check (= sq (Const 8)))
+(prove (= sq (Const 8)))

@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; DERIVE_AC_EQS: off
 ;; Same as identity_late_merge_mset, for an idempotent (Set) op with :identity: the
@@ -15,5 +17,5 @@
 (union (b) (top))
 
 (run 5)
-(check (= s_ab (a)))
-(check (= s_abc (And (a) (c))))
+(prove (= s_ab (a)))
+(prove (= s_abc (And (a) (c))))

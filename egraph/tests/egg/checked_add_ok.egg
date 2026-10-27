@@ -1,7 +1,9 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; TYPES: machine
 (datatype Math (Num i64) (Add Math Math))
 (rewrite (Add (Num x) (Num y)) (Num (i64::+ x y)))
 (let e (Add (Num 3) (Num 5)))
 (run 10)
-(check (= e (Num 8)))
+(prove (= e (Num 8)))

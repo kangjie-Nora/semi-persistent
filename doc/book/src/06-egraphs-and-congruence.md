@@ -64,7 +64,8 @@ the affected parent keys.
 
 Semper maintains e-class membership with union-find. Every e-node has a class
 identifier. `find` follows parent links to the class's canonical
-representative, and path compression shortens later lookups. A `union` between
+representative. In the same pass it applies path halving: each visited node is
+pointed at its grandparent, which shortens later lookups. A `union` between
 two representatives makes one the survivor and the other a child of it.
 
 The survivor is an implementation choice, not a preferred term. A merge does
@@ -74,7 +75,7 @@ heuristic and can change operational work and printed representatives, but it
 does not change which input equality was asserted. [Annex C](C-flag-reference.md)
 lists the available policies.
 
-Path compression and union updates are included in push and pop restoration.
+Path-halving writes and union updates are both undone by a pop.
 Chapter 7 describes that semi-persistent storage.
 
 ## Congruence
@@ -89,7 +90,7 @@ that it is distinct from `left`. It then merges only the leaf classes:
 
 After `(union (a) (b))`, both parent nodes have the canonical key
 `f(Cab, Cab)`. Rebuild detects that collision and merges the parent classes, so
-`(check (= left right))` passes without a rewrite rule.
+`(prove (= left right))` passes without a rewrite rule.
 
 The final `print-size` reports:
 
@@ -119,6 +120,8 @@ congruence-closed state. It visits parents from the absorbed class's use-list,
 replaces child identifiers with current representatives, canonizes the
 children, and probes the hash-consing cache again. A collision schedules
 another class merge, so the process continues until no pending merges remain.
+Rebuild then runs a repair round that cancels inverse pairs formed by later
+merges, and it alternates the two passes until neither changes the graph.
 
 The `union` and equality-check commands rebuild before returning their result.
 Saturation also rebuilds before constructing each round's matching indexes.
@@ -128,12 +131,12 @@ node arenas; it does not trigger rebuild.
 
 Chapter 10 describes the operator-specific canonization performed during term
 construction and parent recanonization. The
-[e-graph design chapter](https://github.com/yaspar-org/semi-persistent/blob/main/egraph/doc/design/05-egraph.md)
+[e-graph design chapter](https://github.com/yaspar-org/semi-persistent/blob/main/egraph/doc/design/04-egraph.md)
 specifies the rebuild worklist and use-list algorithm.
 
 ## What an equality check asks
 
-`(check (= t1 t2))` builds both ground terms, rebuilds the e-graph, and asks
+`(prove (= t1 t2))` builds both ground terms, rebuilds the e-graph, and asks
 whether their e-nodes have the same union-find representative. It does not
 compare two extracted syntax trees.
 
@@ -143,9 +146,20 @@ check means the terms remain in different classes in the graph as currently
 computed. It is not a proof that the terms are unequal in every model of the
 declared laws.
 
-Likewise, `(check (!= t1 t2))` accepts when the two current representatives are
+Likewise, `(prove (!= t1 t2))` accepts when the two current representatives are
 different. Chapter 11 explains how plain, eager, and lazy congruence modes
 change the work performed before that decision.
+
+`(check fact ...)` asks a different question, egglog's: does the e-graph already
+contain a match for these facts? A check builds nothing. `(check (= t1 t2))`
+succeeds only if both terms exist and share a class, so it fails on a term that
+no command built, where `prove` would build it and possibly join it by
+congruence. Names that are not globals are variables of the one check:
+`(check (= e (f x)))` asks whether some class contains an `f` node, and
+`(check (= e (f x)) (= x (a)))` whether one has the class of `(a)` as its child.
+`(!= p q)` requires different classes, and `:count k`, `:min k` and `:none`
+count the matches. Equivalence is proved with `prove`; `check` tests what the
+graph holds.
 
 The storage structures are specified in the design chapters for
 [nodes](https://github.com/yaspar-org/semi-persistent/blob/main/egraph/doc/design/01-node-storage.md),

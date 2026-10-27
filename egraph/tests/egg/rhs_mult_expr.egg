@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; TYPES: machine
 ;; RHS multiplicity expressions: checked u64 arithmetic over bound
 ;; multiplicities, with multiplicity 0 omitting the element. This lets one
@@ -21,5 +23,5 @@
 ;; plain factor: (x+y) * w, the k = 1 omission case
 (let u (Mul A (V "w")))
 (run 4)
-(check (= t (Add (Mul (V "x") A (V "z")) (Mul (V "y") A (V "z")))))
-(check (= u (Add (Mul (V "x") (V "w")) (Mul (V "y") (V "w")))))
+(prove (= t (Add (Mul (V "x") A (V "z")) (Mul (V "y") A (V "z")))))
+(prove (= u (Add (Mul (V "x") (V "w")) (Mul (V "y") (V "w")))))

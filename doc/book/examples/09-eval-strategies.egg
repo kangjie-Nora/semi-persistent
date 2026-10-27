@@ -1,3 +1,5 @@
+;; Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+;; SPDX-License-Identifier: Apache-2.0
 ;; EXPECT: ok
 ;; EVAL: both
 ;; Book chapter 9: the same checks run under naive and semi-naive evaluation.
@@ -17,6 +19,6 @@
 
 ;; Several rounds propagate the recursive result through fresh parent nodes.
 (run 10)
-(check (= result six))
-(check (!= result input))
+(prove (= result six))
+(prove (!= result input))
 ;; ANCHOR_END: eval-strategies
