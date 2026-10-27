@@ -80,7 +80,7 @@ represented value and never grows the Sign component.
 `DivRem<Euclid>` and `DivRem<Trunc>` have sound zero classification and
 universally proved containment contracts. Truncated division and remainder use
 the dividend-sign rule; Euclidean remainder is `Zero` for a zero dividend and
-`NonNeg` otherwise; Euclidean division handles both positive and negative
+`PosOrZero` otherwise; Euclidean division handles both positive and negative
 divisors. The Sign runtime suite checks all 7-by-7 abstract category
 pairs against concrete values from `[-12, 12]`, including exact quotient and
 remainder sign categories, lattice exactness, flags, and FactsZ refinement
