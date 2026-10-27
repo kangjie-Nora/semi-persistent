@@ -18,8 +18,8 @@ fn states() -> [SignKind; 7] {
         SignKind::Neg,
         SignKind::Zero,
         SignKind::Pos,
-        SignKind::NonPos,
-        SignKind::NonNeg,
+        SignKind::NegOrZero,
+        SignKind::PosOrZero,
         SignKind::NonZero,
         SignKind::Top,
     ]
@@ -189,7 +189,7 @@ fn division_flags_and_results_are_sound() {
             let expected_flag = match b_kind {
                 SignKind::Zero => "always",
                 SignKind::Neg | SignKind::Pos | SignKind::NonZero => "never",
-                SignKind::NonPos | SignKind::NonNeg | SignKind::Top => "maybe",
+                SignKind::NegOrZero | SignKind::PosOrZero | SignKind::Top => "maybe",
             };
             for flag in [&ef, &rf, &tf, &tf_r] {
                 assert!(
