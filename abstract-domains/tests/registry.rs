@@ -11,47 +11,91 @@
 // The bodies are `return;` until the registry exists.
 #![allow(clippy::needless_return)]
 
+use semi_persistent_abstract_domains::registry::*;
+
 // ---------------------------------------------------------------------------
 // Carriers and domain names (§2)
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "abs-domain-registry: not implemented yet"]
 fn carriers_resolve() {
     // `int`, `bool`, and `(bitvec N)` for N in {8, 16, 32, 64, 128} resolve to
     // the carriers Int, Bool and BitVec(N). `(bitvec 1)`, `(bitvec 7)` and
     // `(bitvec 256)` resolve to the top-only carrier: no domain is available,
     // the entry size is 0, and every registry function returns top.
     // An unknown carrier name (`real`, `(bitvec 0)`) is rejected.
-    return;
+    assert_eq!(carrier_of_bitvec(8), Some(Carrier::BitVec(Width::W8)));
+    assert_eq!(carrier_of_bitvec(128), Some(Carrier::BitVec(Width::W128)));
+    assert_eq!(carrier_of_bitvec(1), Some(Carrier::TopOnly { bits: 1 }));
+    assert_eq!(carrier_of_bitvec(7), Some(Carrier::TopOnly { bits: 7 }));
+    assert_eq!(carrier_of_bitvec(256), Some(Carrier::TopOnly { bits: 256 }));
+    assert_eq!(carrier_of_bitvec(0), None);
 }
 
 #[test]
-#[ignore = "abs-domain-registry: not implemented yet"]
 fn every_listed_domain_name_resolves() {
     // Each of the 8 (carrier, name) pairs of §2 resolves to one bit of the
     // domain mask: int: interval, congruence, nonzero; bitvec (every native
     // width): ubounds, sbounds, congruence, bits; bool: bool. The bits of one
     // carrier are distinct. A name whose backing field is missing (§2,
     // status column) still resolves, and its bit is reported as unavailable.
-    return;
+    let int = Carrier::Int;
+    let bv = Carrier::BitVec(Width::W8);
+    assert_eq!(domain_bit(int, "interval"), Ok(0));
+    assert_eq!(domain_bit(int, "congruence"), Ok(1));
+    assert_eq!(domain_bit(int, "nonzero"), Ok(2));
+    for (name, bit) in [
+        ("ubounds", 0),
+        ("sbounds", 1),
+        ("congruence", 2),
+        ("bits", 3),
+    ] {
+        assert_eq!(domain_bit(bv, name), Ok(bit));
+    }
+    assert_eq!(domain_bit(Carrier::Bool, "bool"), Ok(0));
+    assert!(domain_available(int, 0));
+    assert!(!domain_available(int, 1));
+    assert!(domain_available(bv, 0));
+    assert!(!domain_available(bv, 3));
 }
 
 #[test]
-#[ignore = "abs-domain-registry: not implemented yet"]
 fn misplaced_domain_names_are_rejected() {
     // `bits` and `ubounds` on int, `interval` and `nonzero` on a bitvec,
     // `congruence` on bool, and an unknown name (`octagon`) are rejected
     // with an error that names the carrier.
-    return;
+    assert_eq!(
+        domain_bit(Carrier::Int, "ubounds"),
+        Err(NameError::WrongCarrier(Carrier::Int))
+    );
+    assert_eq!(
+        domain_bit(Carrier::BitVec(Width::W8), "nonzero"),
+        Err(NameError::WrongCarrier(Carrier::BitVec(Width::W8)))
+    );
+    assert_eq!(
+        domain_bit(Carrier::Bool, "congruence"),
+        Err(NameError::WrongCarrier(Carrier::Bool))
+    );
+    assert_eq!(
+        domain_bit(Carrier::Bool, "octagon"),
+        Err(NameError::Unknown)
+    );
 }
 
 #[test]
-#[ignore = "abs-domain-registry: not implemented yet"]
 fn default_domain_sets() {
     // The default set of each carrier enables every available field of §2.
     // The empty set `()` is accepted and disables the analysis of the sort.
-    return;
+    assert_eq!(default_domains(Carrier::Bool), DomainSet::from_bit(0));
+    assert_eq!(default_domains(Carrier::Int), DomainSet::from_bit(0));
+    assert_eq!(
+        default_domains(Carrier::BitVec(Width::W64)),
+        DomainSet::from_bit(0)
+    );
+    assert_eq!(
+        default_domains(Carrier::TopOnly { bits: 7 }),
+        DomainSet::empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -59,12 +103,18 @@ fn default_domain_sets() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "abs-domain-registry: not implemented yet"]
 fn entry_sizes_match_the_table() {
     // entry_size(carrier) equals the byte count of §3 for Bool, Int and each
     // native width, and is a compile-time constant per carrier. The entry
     // type is Copy.
-    return;
+    assert_eq!(entry_size(Carrier::Bool), 1);
+    assert_eq!(entry_size(Carrier::Int), 16);
+    assert_eq!(entry_size(Carrier::BitVec(Width::W8)), 2);
+    assert_eq!(entry_size(Carrier::BitVec(Width::W16)), 4);
+    assert_eq!(entry_size(Carrier::BitVec(Width::W32)), 8);
+    assert_eq!(entry_size(Carrier::BitVec(Width::W64)), 16);
+    assert_eq!(entry_size(Carrier::BitVec(Width::W128)), 32);
+    assert_eq!(entry_size(Carrier::TopOnly { bits: 7 }), 0);
 }
 
 #[test]
